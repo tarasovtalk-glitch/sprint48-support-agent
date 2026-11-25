@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+API_ai_key.conf
+server.conf
+sprint_tg.conf
+token_max.conf
