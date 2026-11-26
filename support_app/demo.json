@@ -1,0 +1,14 @@
+{
+  "source": "Демонстрационный сценарий Вовы v2, страницы 11–15",
+  "as_of": "2026-11-24",
+  "price_until": "2026-12-01",
+  "license_until": "2026-12-15",
+  "customer": "ООО «Северная линия»",
+  "contract_ref": "DEMO-CONTRACT",
+  "previous_order": "1512-0388",
+  "product": "Kaspersky Endpoint Security Стандартный",
+  "quantity": 40,
+  "renewal_unit_kopecks": 232200,
+  "new_unit_kopecks": 331821,
+  "requested_days": 30
+}

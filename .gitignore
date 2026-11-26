@@ -9,3 +9,6 @@ API_ai_key.conf
 server.conf
 sprint_tg.conf
 token_max.conf
+.venv/
+__pycache__/
+*.sqlite3*

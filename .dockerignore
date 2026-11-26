@@ -1,0 +1,6 @@
+*
+!requirements.txt
+!Dockerfile
+!support_app/
+!support_app/*.py
+!support_app/demo.json
