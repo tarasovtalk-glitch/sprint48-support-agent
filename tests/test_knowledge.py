@@ -179,3 +179,53 @@ def test_decision_with_private_answer_still_sent_but_not_saved(client):
     assert r.json()['knowledge']['saved'] is False
     answers = client.get('/support/api/manager/knowledge', headers=H).json()['answers']
     assert not any('ivan@' in a['answer'] or 'Иванов' in a['answer'] for a in answers)
+
+
+# --- проверка Codex 27.11, круг 2 ---
+@pytest.mark.parametrize('private', ['Заявка № 12345 принята, ждите письмо', 'Получатель Эльвира Кузнецова, всё отправили',
+                                     'Привезём по адресу Ленина, 5 завтра', 'Ваш заказ 4521 собран'])
+def test_more_private_answers_rejected(private):
+    assert has_private(private), private
+
+
+@pytest.mark.parametrize('general', ['Забрать коробку можно в офис продаж', 'Артикул 410137 доступен для заказа',
+                                     'Оплата по счёту, предоплата 100 %.', 'Доставка электронная, ключ приходит на почту.', ANSWER])
+def test_general_answers_allowed(general):
+    assert not has_private(general), general
+
+
+def test_negation_target_matters(mem):
+    save_answer(mem, 'c1', 'Продаёте антивирус Касперского без НДС с доставкой коробки?', 'Цены с НДС; коробку доставим.')
+    assert find_answer(mem, 'Продаёте антивирус Касперского без НДС с доставкой коробки?')
+    assert find_answer(mem, 'Продаёте антивирус Касперского с НДС без доставки коробки?') is None
+
+
+def test_year_equals_one_year(mem):
+    save_answer(mem, 'c1', 'Есть ли продление антивируса на год для бюджетных учреждений?', 'Да, продление на год есть.')
+    assert find_answer(mem, 'Есть ли продление антивируса на 1 год для бюджетных учреждений?')
+
+
+def test_manager_word_in_question_is_not_handoff(client):
+    answer_and_remember(client, text='Можно ли согласовать рассрочку через менеджера?', note='Рассрочку не согласуем, только предоплата.')
+    r = Chat(client).say('Можно ли согласовать рассрочку через менеджера?')
+    assert 'Рассрочку не согласуем' in r['reply'], r['reply']
+
+
+def test_quantity_question_outside_deal_answered(client):
+    answer_and_remember(client, text='Как получить 5 ключей после оплаты?', note='Ключи придут на почту и в личный кабинет после оплаты.')
+    r = Chat(client).say('Как получить 5 ключей после оплаты?')
+    assert 'личный кабинет' in r['reply'], r['reply']
+
+
+def test_knowledge_failure_does_not_roll_back_decision(client, monkeypatch):
+    import support_app.app as app_module
+    monkeypatch.setattr(app_module, 'save_answer', lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError('no such table')))
+    chat = Chat(client)
+    chat.say('Можно ли оплатить картой физлица счёт для организации?')
+    chat.say('Позовите менеджера')
+    cid, version = case_of(client, chat)
+    r = client.post(f'/support/api/manager/cases/{cid}/decision', headers=H,
+                    json={'choice': 'approve', 'version': version, 'request_id': str(uuid.uuid4()),
+                          'reply': 'Картой физлица можно, счёт выставим на организацию.', 'remember': True})
+    assert r.status_code == 200, r.text
+    assert r.json()['knowledge']['saved'] is False and r.json()['state'] == 'approved'
