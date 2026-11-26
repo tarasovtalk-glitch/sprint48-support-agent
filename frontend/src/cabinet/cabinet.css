@@ -51,8 +51,10 @@ b,strong{font-weight:500}
 :focus{outline:none}
 
 /* ---------- каркас ---------- */
+/* боковое поле: 68 px на 1440 как в макете, на экранах уже плавно до 32 px */
+:root{--side:clamp(32px,calc(50vw - 652px),68px)}
 .page{max-width:1440px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
-.header{display:flex;align-items:center;justify-content:space-between;padding:20px 68px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:20px var(--side)}
 .header__brand{display:flex;align-items:center;gap:16px}
 .header__logo{display:block;width:188px;height:27px}
 .header__divider{width:1px;height:24px;background:var(--line)}
@@ -65,7 +67,7 @@ b,strong{font-weight:500}
 .user__role{color:var(--muted)}
 .user .chev{transition:transform var(--t-pop) var(--ease)}
 .user[aria-expanded="true"] .chev{transform:rotate(180deg)}
-.body{flex:1;padding:0 68px 24px;display:flex;flex-direction:column}
+.body{flex:1;padding:0 var(--side) 24px;display:flex;flex-direction:column}
 .canvas{flex:1;padding:28px 0 40px;display:flex;flex-direction:column;gap:28px}
 .canvas__top{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px}
 
@@ -146,10 +148,11 @@ b,strong{font-weight:500}
 
 /* ---------- строки «подпись … значение» ---------- */
 .facts{display:flex;flex-direction:column;gap:4px;width:100%}
-.fact{display:flex;align-items:flex-end;gap:4px;min-width:0}
+.fact{display:flex;align-items:flex-start;gap:4px;min-width:0}
+.fact>.fact__lead{margin:calc(1lh - 7px) 0 0}
 .fact__label{color:var(--muted);flex:none;max-width:60%}
 .fact__lead{flex:1;min-width:12px;height:2px;margin-bottom:5px;border-bottom:1px dashed var(--line)}
-.fact__value{font-weight:500;text-align:right;flex:none;max-width:70%}
+.fact__value{font-weight:500;text-align:right;flex:0 1 auto;min-width:0}
 .facts--plain .fact__value{font-weight:400}
 
 /* ---------- панели ---------- */
@@ -160,7 +163,7 @@ b,strong{font-weight:500}
 .card{background:#fff;border-radius:20px;box-shadow:var(--sh-card);min-width:0}
 
 /* ---------- Сегодня: три колонки ---------- */
-.today{display:grid;grid-template-columns:336px minmax(0,1fr) 300px;gap:24px;align-items:start}
+.today{display:grid;grid-template-columns:336px minmax(0,1fr) clamp(280px,calc(14.3vw + 94px),300px);gap:24px;align-items:start}
 .queue{display:flex;flex-direction:column;gap:12px}
 .qrow{position:relative;display:flex;flex-direction:column;gap:12px;width:100%;padding:16px;border-radius:12px;background:var(--panel);transition:background-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease),opacity var(--t-view) var(--ease),transform var(--t-view) var(--ease)}
 .qrow:hover{background:var(--plate-hover)}
@@ -173,7 +176,7 @@ b,strong{font-weight:500}
 .qrow__title{flex:1;font:400 16px/24px var(--font);min-width:0}
 
 /* карточка случая */
-.case{background:#fff;border-radius:20px;padding:24px;display:flex;flex-direction:column;gap:20px;box-shadow:var(--sh-panel);min-width:0}
+.case{background:#fff;border-radius:20px;padding:24px;display:flex;flex-direction:column;gap:20px;box-shadow:var(--sh-panel);min-width:0;container:case/inline-size}
 .case__top{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:36px}
 .case__top--short{min-height:20px}
 .case__intro{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:32px;align-items:start}
@@ -182,7 +185,7 @@ b,strong{font-weight:500}
 .bubble>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .path{display:flex;flex-direction:column;gap:12px;max-width:300px}
 .path__list{display:flex;flex-direction:column}
-.step{display:grid;grid-template-columns:40px 9px auto;column-gap:12px;align-items:start;position:relative;padding-bottom:12px}
+.step{display:grid;grid-template-columns:40px 9px minmax(0,1fr);column-gap:12px;align-items:start;position:relative;padding-bottom:12px}
 .step:last-child{padding-bottom:0}
 .step__time{color:var(--muted);text-align:right}
 .step__node{width:9px;height:9px;margin-top:5.5px;border-radius:50%;border:1px solid var(--path);background:#fff;position:relative;z-index:1}
@@ -245,6 +248,8 @@ b,strong{font-weight:500}
 .field.is-error,.field[aria-invalid="true"]{border-color:var(--danger)}
 .field:disabled{background:var(--panel);border-color:transparent;color:var(--disabled-ink)}
 textarea.field{resize:vertical;min-height:64px;padding:10px 14px}
+/* ответ клиенту растёт вместе с текстом, без своего скролла */
+.case textarea.field,.talk textarea.field{field-sizing:content;resize:none;overflow-y:hidden}
 .field--num{width:72px;min-width:72px;padding:9px 12px}
 .search{position:relative;display:block}
 .search svg{position:absolute;left:14px;top:50%;margin-top:-10px;pointer-events:none}
@@ -262,14 +267,14 @@ textarea.field{resize:vertical;min-height:64px;padding:10px 14px}
 
 /* ---------- фильтры журнала ---------- */
 .chips{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.chip{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:8px 12px 8px 16px;border-radius:20px;border:1px solid var(--line);background:#fff;font-weight:500;transition:background-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease),border-color var(--t-state) var(--ease)}
+.chip{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;white-space:nowrap;padding:8px 12px 8px 16px;border-radius:20px;border:1px solid var(--line);background:#fff;font-weight:500;transition:background-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease),border-color var(--t-state) var(--ease)}
 .chip:hover{background:var(--panel)}
 .chip.is-active{border-color:transparent;box-shadow:inset 0 0 0 2px var(--accent)}
 .chip:focus-visible{box-shadow:var(--ring)}
 .chip.is-active:focus-visible{box-shadow:inset 0 0 0 2px var(--accent),var(--ring)}
 
 /* группы и строки журнала и знаний */
-.groups{display:flex;flex-direction:column;gap:4px;margin:0 -12px;padding:0 12px;max-height:max(480px,calc(100vh - 380px));overflow-y:auto;overscroll-behavior:contain}
+.groups{display:flex;flex-direction:column;gap:4px;margin:0 -12px;padding:0 12px}
 .group{display:flex;flex-direction:column;gap:4px}
 .ghead{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:8px 0;color:var(--ink);border-radius:8px;transition:color var(--t-state) var(--ease)}
 .ghead > span:first-child{white-space:nowrap}
@@ -303,7 +308,6 @@ button.plate:active{background:var(--plate-pressed)}
 
 /* ---------- Знания ---------- */
 .knowledge{display:grid;grid-template-columns:336px minmax(0,1fr);gap:24px;align-items:start}
-.knowledge .groups{max-height:none;overflow:visible}
 
 /* ---------- Агент ---------- */
 .agent{display:flex;flex-direction:column;gap:28px}
@@ -368,7 +372,11 @@ button.option:focus-visible{box-shadow:var(--ring)}
 .option--off{cursor:default}
 .options.is-off .option{opacity:.5}
 .fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.hours{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hours{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+/* поле срока и часы в одну строку, а если панели не хватает ширины, часы целиком уходят строкой ниже */
+.fields--hours{display:flex;flex-wrap:wrap;gap:16px}
+.fields--hours>.label:first-child{flex:1 1 264px}
+.fields--hours>.label:last-child{flex:0 0 auto}
 
 /* ---------- предупреждение над разделом ---------- */
 .notice{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:12px;background:#fff;box-shadow:var(--sh-panel)}
@@ -429,9 +437,13 @@ button.option:focus-visible{box-shadow:var(--ring)}
 @keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
 
 /* ---------- узкие экраны ---------- */
-@media (max-width:1180px){
-  .header,.body{padding-left:32px;padding-right:32px}
-  .today{grid-template-columns:300px minmax(0,1fr)}
+/* узкая карточка (экран уже 1440): шаги агента встают под заголовок, а не жмут его в колонку */
+@container case (max-width:560px){
+  .case__intro{grid-template-columns:minmax(0,1fr);gap:20px}
+  .path{max-width:none}
+}
+@media (max-width:1239px){
+  .today{grid-template-columns:336px minmax(0,1fr)}
   .today > .side{grid-column:2}
   .agent-cols,.settings-cols{grid-template-columns:1fr}
 }

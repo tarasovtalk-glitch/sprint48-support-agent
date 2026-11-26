@@ -567,7 +567,7 @@
       '<label class="label"><span class="label__text">Предупредить при, ₽</span><input class="field' + (warnBad ? ' is-error' : '') + '" inputmode="numeric" data-set="warn_rub" value="' + esc(group3(s.warn_rub)) + '"' + (warnBad ? ' aria-invalid="true" aria-describedby="warnErr"' : '') + '></label></div>' +
       (warnBad ? '<p class="error-text" id="warnErr">Предупреждение должно быть меньше лимита</p>' : '') +
       '<p>' + rich('Когда лимит потрачен, агент **молчит до 1-го числа**, чаты идут менеджерам.\nО пороге менеджеры узнают **в кабинете' + (s.notify ? ' и уведомлением' : '') + '**.') + '</p></section>';
-    var hours = '<section class="panel"><h2 class="h2">Срок ответа и часы менеджеров</h2><div class="fields">' +
+    var hours = '<section class="panel"><h2 class="h2">Срок ответа и часы менеджеров</h2><div class="fields fields--hours">' +
       '<label class="label"><span class="label__text">Ответ менеджера обещаем через, мин</span><input class="field" inputmode="numeric" data-set="answer_min" value="' + esc(s.answer_min) + '"></label>' +
       '<div class="label"><span class="label__text" id="hoursLabel">Часы менеджеров, по Москве</span><div class="hours" role="group" aria-labelledby="hoursLabel">' +
       '<button class="select" type="button" data-act="set-days" aria-haspopup="menu" aria-expanded="false" aria-label="Дни: ' + esc(s.days) + '">' + esc(s.days) + IC.chev + '</button>' +
@@ -717,7 +717,15 @@
     $$('[data-draft]').forEach(function (f) {
       var d = ui.drafts[f.getAttribute('data-id')], k = f.getAttribute('data-draft');
       if (d && d[k] != null && f.value !== d[k]) f.value = d[k];
+      grow(f);
     });
+  }
+  // поле ответа растёт по тексту; где браузер не умеет field-sizing, высоту ставим сами
+  var SIZES_ITSELF = window.CSS && CSS.supports && CSS.supports('field-sizing', 'content');
+  function grow(f) {
+    if (SIZES_ITSELF || f.tagName !== 'TEXTAREA' || !f.closest('.case, .talk')) return;
+    f.style.height = 'auto';
+    f.style.height = (f.scrollHeight + f.offsetHeight - f.clientHeight) + 'px';
   }
   function rerenderKeep(f) {
     var sel = '[data-act="' + f.getAttribute('data-act') + '"]', pos = f.selectionStart;
@@ -728,6 +736,7 @@
     if (k) {
       var id = f.getAttribute('data-id'), d = ui.drafts[id] || (ui.drafts[id] = {});
       d[k] = f.value;
+      grow(f);
       var scope = f.closest('.case, .talk, .dialog') || document;
       $$('[data-needs="' + k + '"]', scope).forEach(function (b) { b.disabled = !f.value.trim(); });
       return;

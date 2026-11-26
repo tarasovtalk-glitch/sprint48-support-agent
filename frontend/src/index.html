@@ -18,7 +18,9 @@ html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",R
 .brand__logo{display:block;width:230px;height:33px}
 .brand__divider{width:1px;height:28px;background:var(--line)}
 .brand__title{font-size:16px;line-height:24px;color:var(--muted);white-space:nowrap}
-.screen{box-sizing:border-box;min-height:100vh;width:975px;margin:0 auto;display:flex;align-items:center;padding:40px 0}
+/* текст и окно чата стоят на одной горизонтали: на высоком экране это середина экрана, на низком окно
+   прижато к 96 px сверху и укорочено, и середина текста опускается вместе с серединой окна */
+.screen{box-sizing:border-box;min-height:100vh;width:975px;margin:0 auto;display:flex;align-items:center;padding:calc(40px + 2 * clamp(0px, 436px - 50vh, 28px)) 0 40px}
 .screen__text{width:420px;display:flex;flex-direction:column;gap:40px;align-items:flex-start}
 .screen__head{display:flex;flex-direction:column;gap:16px}
 .screen__title{margin:0;font-size:40px;line-height:48px;font-weight:500}
