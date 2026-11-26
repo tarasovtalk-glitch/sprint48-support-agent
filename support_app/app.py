@@ -3,11 +3,13 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from typing import Literal
 from uuid import UUID, uuid4
@@ -22,6 +24,7 @@ from .mail import run_mail_queue
 from .model import choose_tool, classify
 from .scenario import load_scenario
 from .selection import catalog_router
+from .jury import create_jury_store
 from .store import (
     Store, append_event, case_view, chat_state, queue_mail,
     read_chat_messages, save_chat_message, save_chat_state,
@@ -91,6 +94,15 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     store = Store(database)
     demo_key = os.environ.get('SUPPORT_DEMO_KEY', '')
     manager_key = os.environ.get('SUPPORT_MANAGER_KEY', '')
+    key_path = database.with_name('support-access-keys.json')
+    access_keys = json.loads(key_path.read_text(encoding='utf-8')) if key_path.is_file() else {}
+    if not isinstance(access_keys, dict) or any(
+        not re.fullmatch(r'[a-f0-9]{64}', digest) or role not in ('admin', 'manager', 'jury')
+        for digest, role in access_keys.items()
+    ):
+        raise ValueError('Invalid cabinet access key configuration.')
+    jury_directory = TemporaryDirectory(prefix='support-jury-') if 'jury' in access_keys.values() else None
+    jury_store = create_jury_store(Path(jury_directory.name) / 'sample.sqlite3') if jury_directory else None
     model_key = os.environ.get('YANDEX_API_KEY', '')
     model_uri = os.environ.get('YANDEX_MODEL_URI', '')
     daily_limit = int(os.environ.get('SUPPORT_DAILY_BUDGET_RUB', '50')) * 1_000_000
@@ -115,13 +127,36 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             if smtp_host:
                 stop.set()
                 worker.join(timeout=6)
+            if jury_directory:
+                jury_directory.cleanup()
 
     app = FastAPI(title='SMF Support', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     catalog_path = Path(os.environ.get('SUPPORT_CATALOG_DATABASE', database.with_name('catalog.sqlite3')))
     app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
 
-    def manager(x_manager_key: str = Header(default='')):
+    def cabinet_role(x_manager_key: str = Header(default='')) -> str:
+        role = access_keys.get(token_hash(x_manager_key)) if 24 <= len(x_manager_key) <= 128 else None
+        if role:
+            return role
+        if access_keys and len(manager_key) < 24:
+            raise HTTPException(401, 'Access key required.')
         require_key(manager_key, x_manager_key)
+        return 'admin'
+
+    def cabinet_reader(role: str = Depends(cabinet_role)) -> Store:
+        if role == 'jury':
+            if jury_store is None:
+                raise HTTPException(503, 'Jury samples are unavailable.')
+            return jury_store
+        return store
+
+    def manager(role: str = Depends(cabinet_role)):
+        if role == 'jury':
+            raise HTTPException(403, 'Jury access is read only.')
+
+    def admin(role: str = Depends(cabinet_role)):
+        if role != 'admin':
+            raise HTTPException(403, 'Administrator access is required.')
 
     def client(authorization: str = Header(default='')) -> str:
         prefix, _, token = authorization.partition(' ')
@@ -281,10 +316,10 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             'Cache-Control': 'no-store',
         })
 
-    @app.get(PREFIX + '/manager/cases', dependencies=[Depends(manager)])
+    @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
-              offset: int = Query(default=0, ge=0)):
-        with store.connect() as db:
+              offset: int = Query(default=0, ge=0), reader: Store = Depends(cabinet_reader)):
+        with reader.connect() as db:
             rows = db.execute('''
                 SELECT c.*,
                     COALESCE((SELECT j.created FROM journal j WHERE j.case_id=c.id AND j.event='opened' ORDER BY j.id LIMIT 1),
@@ -303,9 +338,9 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                               'first_client_message': row['first_client_message']})
             return {'cases': cases}
 
-    @app.get(PREFIX + '/manager/cases/{case_id}/messages', dependencies=[Depends(manager)])
-    def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0)):
-        with store.connect() as db:
+    @app.get(PREFIX + '/manager/cases/{case_id}/messages')
+    def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0), reader: Store = Depends(cabinet_reader)):
+        with reader.connect() as db:
             get_case(db, case_id)
             return {'messages': read_chat_messages(db, case_id, after)}
 
@@ -354,7 +389,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 queue_mail(db, case_id, 'approved', offer)
             return case_view(get_case(db, case_id))
 
-    @app.post(PREFIX + '/manager/cases/{case_id}/rule', dependencies=[Depends(manager)])
+    @app.post(PREFIX + '/manager/cases/{case_id}/rule', dependencies=[Depends(admin)])
     def create_rule(case_id: str, payload: RuleConfirmation):
         if chat_only:
             raise HTTPException(409, 'Automatic deferral rules are disabled in chat-only mode.')
@@ -375,15 +410,15 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 append_event(db, case_id, 'contract_rule_saved', offer['contract_ref'])
             return {'contract_ref': offer['contract_ref'], 'days': offer['requested_days'], 'source_case': case_id}
 
-    @app.get(PREFIX + '/manager/knowledge', dependencies=[Depends(manager)])
-    def knowledge():
-        with store.connect() as db:
+    @app.get(PREFIX + '/manager/knowledge')
+    def knowledge(reader: Store = Depends(cabinet_reader)):
+        with reader.connect() as db:
             rows = db.execute('SELECT * FROM rules ORDER BY rowid DESC LIMIT 50').fetchall()
         return {'rules': [dict(row) for row in rows]}
 
-    @app.get(PREFIX + '/manager/cases/{case_id}/journal', dependencies=[Depends(manager)])
-    def journal(case_id: str):
-        with store.connect() as db:
+    @app.get(PREFIX + '/manager/cases/{case_id}/journal')
+    def journal(case_id: str, reader: Store = Depends(cabinet_reader)):
+        with reader.connect() as db:
             get_case(db, case_id)
             events = db.execute('SELECT event,detail,created FROM journal WHERE case_id=? ORDER BY id', (case_id,)).fetchall()
             usage = db.execute('SELECT input_tokens,output_tokens,cost_microrubles FROM model_usage WHERE case_id=? AND input_tokens IS NOT NULL ORDER BY id', (case_id,)).fetchall()
