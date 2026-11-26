@@ -8,30 +8,69 @@
 <link rel="icon" href="favicon/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="chat/chat.css">
 <style>
-/* Свой экран чата: окно Webim с агентом стоит на странице открытым, без копии сайта магазина.
-   На широком экране слева короткое пояснение, на телефоне окно во весь экран. */
-:root{--ink:#1f2126;--muted:#5c5f66;--line:#d8d9e1}
-html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",Roboto,Arial,sans-serif}
-.screen{box-sizing:border-box;min-height:100vh;width:calc(50% - 40px);display:flex;align-items:center;justify-content:flex-end;padding:48px 64px 48px 24px}
-.screen__text{max-width:440px;display:flex;flex-direction:column;gap:16px}
-.screen__title{margin:0;font-size:32px;line-height:40px;font-weight:700}
-.screen__lead{margin:0;font-size:16px;line-height:24px;color:var(--muted)}
-.screen__note{margin:8px 0 0;padding-top:16px;border-top:1px solid var(--line);font-size:14px;line-height:20px;color:var(--muted)}
-.screen__link{color:var(--ink);text-underline-offset:3px}
+/* Главный экран стенда по фрейму s-0 в Figma: слева что делает агент и что остаётся менеджеру,
+   справа окно Webim с агентом, открытое сразу. Группа 975 px стоит по центру, окно чата по центру по высоте. */
+@font-face{font-family:"SLChatRoboto";font-weight:600;font-display:swap;src:url(cabinet/fonts/roboto-cyrillic-600-normal.woff2) format("woff2");unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:"SLChatRoboto";font-weight:600;font-display:swap;src:url(cabinet/fonts/roboto-latin-600-normal.woff2) format("woff2");unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122}
+:root{--ink:#1f2024;--muted:#5c5f66;--line:#eae9f0;--brand:#c60b46;--brand-hover:#ae0a3e;--brand-pressed:#970936;--ease:cubic-bezier(.22,1,.36,1)}
+html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.brand{position:absolute;left:40px;top:40px;display:flex;align-items:center;gap:16px}
+.brand__logo{display:block;width:230px;height:33px}
+.brand__divider{width:1px;height:28px;background:var(--line)}
+.brand__title{font-size:16px;line-height:24px;color:var(--muted);white-space:nowrap}
+.screen{box-sizing:border-box;min-height:100vh;width:975px;margin:0 auto;display:flex;align-items:center;padding:40px 0}
+.screen__text{width:420px;display:flex;flex-direction:column;gap:40px;align-items:flex-start}
+.screen__head{display:flex;flex-direction:column;gap:16px}
+.screen__title{margin:0;font-size:40px;line-height:48px;font-weight:500}
+.screen__lead{margin:0;font-size:18px;line-height:28px;color:var(--muted)}
+.roles{width:415px}
+.role{display:flex;gap:16px;font-size:16px;line-height:24px}
+.role--agent{padding-bottom:12px;border-bottom:1px dashed var(--line)}
+.role--manager{padding-top:12px}
+.role__label{flex:none;width:88px;font-weight:500}
+.role__text{margin:0;color:var(--muted)}
+.role__text b{font-weight:600}
+.cta{display:inline-flex;align-items:center;justify-content:center;padding:16px 24px;border-radius:14px;background:var(--brand);color:#fff;font-size:16px;line-height:24px;font-weight:500;text-decoration:none;
+  transition:background-color .12s var(--ease),transform .12s var(--ease),box-shadow .12s var(--ease)}
+.cta:hover{background:var(--brand-hover)}
+.cta:active{background:var(--brand-pressed);transform:scale(.98)}
+.cta:focus-visible{outline:0;box-shadow:0 0 0 2px #fff,0 0 0 4px var(--brand)}
+/* текст появляется один раз при загрузке: снизу на 8 px и из прозрачного, 320 мс */
+.screen__text>*{animation:rise .32s var(--ease) both}
+.screen__text>:nth-child(2){animation-delay:.06s}
+.screen__text>:nth-child(3){animation-delay:.12s}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
 .slc-screen .slc-launcher,.slc-screen .slc-feedback,.slc-screen .slc-head__btn[data-act="close"]{display:none}
-.slc-screen .slc-panel{right:auto;left:calc(50% + 40px);bottom:auto;top:max(24px,calc(50vh - 340px));height:min(680px,calc(100vh - 48px))}
+.slc-screen .slc-panel{right:auto;left:calc(50% + 147.5px);bottom:auto;top:max(96px,calc(50vh - 340px));height:min(680px,calc(100vh - 136px))}
+@media (max-width:1100px){
+  .screen{width:auto;margin:0;padding-left:40px;padding-right:420px}
+  .screen__text,.roles{width:auto;max-width:420px}
+  .slc-screen .slc-panel{left:auto;right:40px}
+}
 @media (max-width:760px){
-  .screen{display:none}
+  .brand,.screen{display:none}
   .slc-screen .slc-panel{left:0;right:0;top:0;bottom:0;width:auto;height:auto;border-radius:0;box-shadow:none}
 }
+@media (prefers-reduced-motion:reduce){.screen__text>*{animation:none}.cta{transition:none}}
 </style>
 </head>
 <body class="slc-screen">
+<header class="brand">
+  <img class="brand__logo" src="cabinet/softline-logo.svg" width="230" height="33" alt="Софтлайн">
+  <span class="brand__divider" aria-hidden="true"></span>
+  <span class="brand__title">Демо-стенд команды SMF</span>
+</header>
 <main class="screen">
   <div class="screen__text">
-    <h1 class="screen__title">ИИ-помощник в&nbsp;чате Softline Store</h1>
-    <p class="screen__lead">Подбирает лицензии по&nbsp;каталогу магазина, считает сумму и&nbsp;готовит коммерческое предложение. Скидку сверх правила, отсрочку и&nbsp;КП решает менеджер в&nbsp;своём кабинете, ответ приходит в&nbsp;этот&nbsp;же чат.</p>
-    <p class="screen__note">Демо-стенд хакатона, не&nbsp;магазин Softline. Позиции и&nbsp;цены из&nbsp;выгрузки каталога магазина. <a class="screen__link" href="cabinet/">Кабинет менеджера</a></p>
+    <div class="screen__head">
+      <h1 class="screen__title">ИИ-помощник в&nbsp;чате Softline Store</h1>
+      <p class="screen__lead">Отвечает клиенту сразу и&nbsp;называет цены только из&nbsp;каталога магазина.</p>
+    </div>
+    <div class="roles">
+      <div class="role role--agent"><span class="role__label">Агент сам</span><p class="role__text">Подбирает лицензии, считает сумму и&nbsp;готовит КП</p></div>
+      <div class="role role--manager"><span class="role__label">Менеджер</span><p class="role__text">Скидка больше <b>5%</b>, отсрочка, проверка&nbsp;КП. Ответ в&nbsp;этом&nbsp;же чате</p></div>
+    </div>
+    <a class="cta" href="cabinet/">Кабинет менеджера</a>
   </div>
 </main>
 <script src="config.js"></script>

@@ -575,9 +575,16 @@
         show(r.messages); run();
       });
     }
+    // после приветствия шесть тем, как в меню Webim на сайте: тема уходит агенту обычной репликой клиента
+    var LIVE_TOPICS = ['Выставить счёт', 'Тендер или госзакупка', 'Статус заказа и документы',
+      'Ключ, активация, техническая поддержка', 'Google Workspace', 'Задать вопрос'];
+    function topics() {
+      pills(LIVE_TOPICS.map(function (t) { return { text: t, go: function () { send(t, null, true); } }; }));
+      body.scrollTop = body.scrollHeight;
+    }
     function fresh() {
       sys('Сегодня, ' + hhmm()); typing(true);
-      open().then(function () { typing(false); }, fail);
+      open().then(function () { typing(false); topics(); }, fail);
     }
     function start() {
       setHead(BOT, AGENT_ROLE);
@@ -587,6 +594,7 @@
       sid = saved; typing(true);
       call('GET', '/chat/sessions/' + encodeURIComponent(sid) + '/messages').then(function (r) {
         typing(false); show(r.messages, true); if (!closed) run();
+        if (!closed && !(r.messages || []).some(function (m) { return m.from === 'client'; })) topics();
       }, function () { sid = ''; try { sessionStorage.removeItem(KEY); } catch (e) {} typing(false); fresh(); });
     }
     function send(text, buttonId, echoed) {
