@@ -68,11 +68,11 @@
       return r.status === 204 ? {} : r.json();
     });
   }
-  // раздел с сервера; нет сервера или раздела, берём пример и помечаем вкладку
+  // Примеры доступны только в явно выбранном деморежиме.
   function load(key, path, sample) {
     if (DEMO) { if (store[key] == null) store[key] = copy(sample); return Promise.resolve(store[key]); }
     return call('GET', path).then(function (d) { store.sample[key] = false; store[key] = d; return d; }, function (e) {
-      store.sample[key] = (e && e.status) || true; if (store[key] == null) store[key] = copy(sample); return store[key];
+      store.sample[key] = (e && e.status) || true; store[key] = null; return null;
     });
   }
   function isLocal(key) { return DEMO || store.sample[key]; }
@@ -105,13 +105,38 @@
     render();
   }
 
+  var renderVersion = 0;
   function render() {
+    var version = ++renderVersion;
     var v = $('#view');
-    if (ui.tab === 'today') return loadToday().then(function () { v.innerHTML = viewToday(); after(); });
-    if (ui.tab === 'journal') return load('journal', '/journal', SAMPLE.journal).then(function () { v.innerHTML = viewJournal(); after(); });
-    if (ui.tab === 'knowledge') return load('knowledge', '/knowledge', SAMPLE.knowledge).then(function () { v.innerHTML = viewKnowledge(); after(); });
-    return Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]).then(function () {
-      v.innerHTML = viewAgent(); after();
+    function show(markup) {
+      if (version !== renderVersion) return;
+      v.innerHTML = markup; after();
+    }
+    function showLoaded(data, view) {
+      show(data ? view() : '<p class="panel__note">Данные раздела пока недоступны.</p>');
+    }
+    function selected() {
+      if (ui.tab === 'today') return loadToday().then(function (data) { showLoaded(data, viewToday); });
+      if (ui.tab === 'journal') return load('journal', '/journal', SAMPLE.journal).then(function (data) { showLoaded(data, viewJournal); });
+      if (ui.tab === 'knowledge') return load('knowledge', '/knowledge', SAMPLE.knowledge).then(function (data) { showLoaded(data, viewKnowledge); });
+      if (!DEMO) return load('metrics', '/agent/metrics').then(function (data) {
+        showLoaded(data, function () {
+          return '<section class="panel">' + panelHead(data.sample ? 'Статистика учебных диалогов' : 'Статистика стенда') +
+            '<div class="panel__list"><p>Диалоги: ' + esc(data.cases) + '</p>' +
+            '<p>Вызовы модели: ' + esc(data.model_calls) + '</p>' +
+            '<p>Токены: ' + esc(data.input_tokens) + ' входящих, ' + esc(data.output_tokens) + ' исходящих</p>' +
+            '<p>Расчётная стоимость: ' + t((data.cost_microrubles / 1000000).toLocaleString('ru-RU', { maximumFractionDigits: 4 }) + ' ₽') + '</p></div></section>';
+        });
+      });
+      return Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)])
+        .then(function () { show(viewAgent()); });
+    }
+    return (DEMO ? Promise.resolve() : call('GET', '/access')).then(selected, function () {
+      if (version !== renderVersion) return;
+      store = { sample: {} };
+      ui.drafts = {};
+      show('');
     });
   }
   function after() { renderTop(); restoreDrafts(); scrollEdges(); }
@@ -136,23 +161,14 @@
   /* ---------- шапка холста: счётчик, состояние агента, строка-предупреждение ---------- */
   function renderTop() {
     var n = waiting().length, c = $('#todayCounter');
-    if (store.cases) { c.hidden = false; c.textContent = n; c.className = 'counter ' + (n ? 'counter--alert' : 'counter--zero'); }
+    c.hidden = !store.cases;
+    if (store.cases) { c.textContent = n; c.className = 'counter ' + (n ? 'counter--alert' : 'counter--zero'); }
     var st = (store.status && store.status.state) || 'on';
     var b = { on: ['success', 'Агент работает'], paused: ['warning', 'Агент на паузе'], limit: ['danger', 'Лимит потрачен'], down: ['danger', 'Агент не отвечает'] }[st] || ['success', 'Агент работает'];
-    $('#agentBadge').innerHTML = badge(b[0], b[1]);
+    $('#agentBadge').innerHTML = store.status ? badge(b[0], b[1]) : '';
     var notes = [];
     if (st === 'limit') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Лимит на месяц потрачен. Агент молчит до 1-го числа, все чаты идут менеджерам') + '</span><a class="link" href="#agent/settings">Поднять лимит</a></div>');
     if (st === 'down') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Модель не отвечает. Все чаты идут менеджерам, агент вернётся сам, когда модель заработает') + '</span></div>');
-    var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab];
-    // вместо данных сервера показан пример: это предупреждение, оно красное, как остальные. Текст по причине
-    var why = store.sample[key];
-    if (!DEMO && why) {
-      notes.push('<div class="notice"><span class="notice__text">' + t(why === 401 || why === 403
-        ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
-        : why === 503 ? 'На сервере агента не задан ключ менеджера. Пока показан пример, решения из него никуда не уходят'
-        : why === 404 ? 'Сервер агента пока не отдаёт этот раздел, показан пример с макета'
-        : 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят') + '</span></div>');
-    }
     $('#notice').innerHTML = notes.join('');
     $('#notice').style.display = notes.length ? '' : 'none';
   }
@@ -719,20 +735,18 @@
   function refresh() {
     if (DEMO) return;
     var busy = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-    call('GET', '/agent/status').then(function (s) { store.status = s; store.sample.status = false; renderTop(); }, function () { store.sample.status = true; });
-    if (ui.tab !== 'today' && ui.tab !== 'agent') return;
+    if (ui.tab !== 'today') return;
     call('GET', '/cases').then(function (d) {
       var sig = JSON.stringify(d); store.sample.cases = false;
       if (sig === lastCases) return; lastCases = sig;
       var events = {}; cases().forEach(function (c) { if (c.events) events[c.id] = c.events; });
       store.cases = d; cases().forEach(function (c) { if (!c.events && events[c.id]) c.events = events[c.id]; });
       if (ui.tab === 'today' && !busy) render(); else renderTop();
-    }, function () {});
+    }, function (error) { if (error.status === 401 || error.status === 403) render(); });
   }
 
   window.addEventListener('hashchange', route);
   if (DEMO) store.status = copy(SAMPLE.status);
-  else call('GET', '/agent/status').then(function (s) { store.status = s; renderTop(); }, function () { store.status = { state: 'on' }; store.sample.status = true; });
-  loadToday().then(function () { lastCases = DEMO ? '' : JSON.stringify(store.cases); route(); });
+  route();
   setInterval(refresh, 5000);
 })();

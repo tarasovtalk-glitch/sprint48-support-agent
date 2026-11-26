@@ -115,7 +115,7 @@
   function managerHeaders() { return { 'X-Manager-Key': read(MANAGER_KEY) || '' }; }
   function manager(method, path, body) {
     return raw(method, path, body, managerHeaders()).catch(function (e) {
-      if (e.status === 401 || e.status === 503) askKey(e.status);
+      if (e.status === 401 || e.status === 403 || e.status === 503) askKey(e.status);
       throw e;
     });
   }
@@ -332,6 +332,8 @@
       return method === 'POST' ? chatSend(sid, body || {}) : chatPoll(sid, +(m[2] || 0), m[2] == null);
     }
     if (/^\/chat\/sessions\/[^/]+\/rating$/.test(path)) return Promise.resolve({}); // оценки в API пока нет
+    if (method === 'GET' && path === '/access') return manager('GET', '/manager/access');
+    if (method === 'GET' && path === '/agent/metrics') return manager('GET', '/manager/metrics');
     if (method === 'GET' && path === '/cases') return casesList();
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
