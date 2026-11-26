@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units
+from .knowledge import all_answers, question_for, save_answer
 from .chat import buttons, customer_text, intent_cues, run_turn, tool_request
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
@@ -60,10 +61,17 @@ class Decision(BaseModel):
     version: int = Field(ge=0)
     request_id: UUID
     note: str = Field(default='', max_length=400, validation_alias=AliasChoices('reply', 'note'))
+    remember: bool = False  # сохранить ответ менеджера в базу знаний: следующий клиент с тем же вопросом получит его сразу
 
 
 class RuleConfirmation(BaseModel):
     confirmed: StrictBool
+
+
+class KnowledgeEntry(BaseModel):
+    confirmed: StrictBool
+    question: str | None = Field(default=None, max_length=1000)
+    answer: str | None = Field(default=None, max_length=1000)
 
 
 def require_key(expected: str, supplied: str):
@@ -399,6 +407,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     append_event(db, case_id, 'catalog_quote_sent')
                 default = 'Коммерческое предложение готово.' if document_url else 'Менеджер рассмотрел запрос.'
                 save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
+                if decision.remember and decision.note.strip():
+                    remember_answer(db, case_id, None, decision.note)
                 return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
@@ -426,11 +436,33 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 append_event(db, case_id, 'contract_rule_saved', offer['contract_ref'])
             return {'contract_ref': offer['contract_ref'], 'days': offer['requested_days'], 'source_case': case_id}
 
+    def remember_answer(db, case_id: str, question: str | None, answer: str | None) -> dict:
+        messages = read_chat_messages(db, case_id)
+        if not answer:
+            row = get_case(db, case_id)
+            last = next((m['text'] for m in reversed(messages) if m['role'] == 'manager'), '')
+            answer = row['decision_note'] or last
+        try:
+            entry = save_answer(db, case_id, question or question_for(messages), answer or '')
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        append_event(db, case_id, 'knowledge_saved', str(entry['id']))
+        return entry
+
+    @app.post(PREFIX + '/manager/cases/{case_id}/knowledge', dependencies=[Depends(manager)])
+    def save_knowledge(case_id: str, payload: KnowledgeEntry):
+        if not payload.confirmed:
+            raise HTTPException(422, 'Confirm saving the answer to the knowledge base.')
+        with store.connect(write=True) as db:
+            get_case(db, case_id)
+            return remember_answer(db, case_id, payload.question, payload.answer)
+
     @app.get(PREFIX + '/manager/knowledge')
     def knowledge(reader: Store = Depends(cabinet_reader)):
         with reader.connect() as db:
             rows = db.execute('SELECT * FROM rules ORDER BY rowid DESC LIMIT 50').fetchall()
-        return {'rules': [dict(row) for row in rows]}
+            answers = all_answers(db) if reader is store else []
+        return {'rules': [dict(row) for row in rows], 'answers': answers}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/journal')
     def journal(case_id: str, reader: Store = Depends(cabinet_reader)):

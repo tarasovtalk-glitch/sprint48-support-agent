@@ -8,6 +8,7 @@ from .dialog import CORRECTION, catalog_turn, digits, quantity, units_for
 from .catalog import find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
 from .selection import Selection, selection_result
+from .knowledge import find_answer
 from .store import append_event
 
 
@@ -358,6 +359,12 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     state['turn_no'] = state.get('turn_no', 0) + 1
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
+    if text and not action and not state.get('awaiting_customer'):
+        known = find_answer(db, text)
+        if known:  # менеджер уже отвечал на такой вопрос и сохранил ответ в базу знаний
+            append_event(db, row['id'], 'knowledge_answer', str(known['id']))
+            return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
+                    + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
     count_query = digits(query)
     correction = CORRECTION.search(count_query)
     count = correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
