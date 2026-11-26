@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 from zipfile import ZipFile
 
-from .chat import run_turn
+from .chat import intent_cues, run_turn, tool_request
 from .scenario import load_scenario
 from .store import Store
 
@@ -55,10 +55,13 @@ def evaluate(archive: Path, catalog: Path) -> dict:
     fixture = load_scenario(Path(__file__).with_name('demo.json')).offer()
     totals = Counter()
     by_topic = {}
+    needs_model = 0
+    qualifies = 0
     with TemporaryDirectory() as temp:
         store = Store(Path(temp) / 'evaluation.sqlite3')
         for topic, text, page in input_records(archive):
             state = {}
+            needs_model += bool(tool_request(text, None, '', state) or intent_cues(text))
             case_id = uuid4().hex
             with store.connect(write=True) as db:
                 db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)', (case_id, case_id, json.dumps(fixture)))
@@ -66,11 +69,14 @@ def evaluate(archive: Path, catalog: Path) -> dict:
                 reply, buttons = run_turn(db, case, state, catalog, text=text, page_url=page)
             result = outcome(state, reply, buttons)
             totals[result] += 1
+            if result == 'knowledge_link' or (result == 'catalog_options' and ' ₽' in reply and 'https://store.softline.ru/' in reply):
+                qualifies += 1
             by_topic.setdefault(topic, Counter())[result] += 1
     return {
         'mode': 'offline_first_turn', 'records': sum(totals.values()), 'outcomes': dict(totals),
         'by_input_label': {topic: dict(items) for topic, items in sorted(by_topic.items())},
-        'model_calls': 0, 'manual_acceptance': None,
+        'model_calls': 0, 'first_turns_eligible_for_model': needs_model,
+        'first_turns_matching_resolution_rule': qualifies, 'manual_acceptance': None,
     }
 
 

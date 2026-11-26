@@ -10,24 +10,31 @@ SYSTEM = '''Определи намерение клиента магазина 
 INTENTS = {'price', 'quote', 'invoice', 'deferral', 'selection', 'help', 'handoff', 'unknown'}
 INPUT_RATE = 100
 OUTPUT_RATE = 200
-MAX_OUTPUT = 24
+MAX_OUTPUT = 72
 RESERVE = 4096 * INPUT_RATE + MAX_OUTPUT * OUTPUT_RATE
 MOSCOW = timezone(timedelta(hours=3))
+TOOL_DESCRIPTIONS = {
+    'clarify_requirements': 'Уточнить оставшиеся требования перед поиском лицензий.',
+    'search_catalog': 'Получить варианты из каталога с учётом уже известных требований.',
+    'check_registry': 'Проверить российский аналог или номер записи в реестре для подходящих вариантов.',
+    'draft_quote': 'Подготовить черновик КП по выбранной позиции для проверки менеджером.',
+    'contact_manager': 'Передать оператору запрос, который требует его решения.',
+}
 
 
-def classify(store: Store, case_id: str, text: str, *, api_key: str, model_uri: str, daily: int, total: int) -> str:
+def completion(store: Store, case_id: str, body: dict, *, api_key: str, model_uri: str, daily: int, total: int):
     if not api_key or not model_uri:
-        return 'unknown'
+        return None
     day = datetime.now(MOSCOW).date().isoformat()
     reservation = store.reserve_model(case_id, day, RESERVE, daily, total)
     if reservation is None:
-        return 'unknown'
+        return None
 
     body = json.dumps({
         'model': model_uri,
-        'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': text}],
         'max_tokens': MAX_OUTPUT,
         'temperature': 0,
+        **body,
     }).encode()
     request = Request('https://ai.api.cloud.yandex.net/v1/chat/completions', data=body, headers={
         'Authorization': 'Api-Key ' + api_key,
@@ -39,11 +46,46 @@ def classify(store: Store, case_id: str, text: str, *, api_key: str, model_uri: 
         usage = result['usage']
         input_tokens = max(0, int(usage['prompt_tokens']))
         output_tokens = max(0, int(usage['completion_tokens']))
-        intent = result['choices'][0]['message']['content'].strip().lower()
+        message = result['choices'][0]['message']
     except (URLError, OSError, ValueError, TypeError, KeyError, IndexError, AttributeError):
         # On an uncertain failure the provider may still have charged for the request.
         with store.connect(write=True) as db:
             append_event(db, case_id, 'model_unavailable')
-        return 'unknown'
+        return None
     store.record_model(reservation, input_tokens, output_tokens, input_tokens * INPUT_RATE + output_tokens * OUTPUT_RATE)
+    return message if isinstance(message, dict) else None
+
+
+def classify(store: Store, case_id: str, text: str, **options) -> str:
+    message = completion(store, case_id, {
+        'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': text}],
+    }, **options)
+    content = (message or {}).get('content')
+    intent = content.strip().lower() if isinstance(content, str) else 'unknown'
     return intent if intent in INTENTS else 'unknown'
+
+
+def choose_tool(store: Store, case_id: str, cue: str, available: tuple[str, ...], **options) -> str | None:
+    tools = [
+        {'type': 'function', 'function': {'name': name, 'description': TOOL_DESCRIPTIONS[name],
+         'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}}}
+        for name in available
+    ]
+    message = completion(store, case_id, {
+        'messages': [
+            {'role': 'system', 'content': 'Выбери и вызови ровно один подходящий инструмент магазина. Не выдумывай данные и не пиши обычный текст.'},
+            {'role': 'user', 'content': cue},
+        ],
+        'tools': tools,
+        'tool_choice': 'auto',
+    }, **options)
+    calls = (message or {}).get('tool_calls') or []
+    if not isinstance(calls, list) or len(calls) != 1:
+        return None
+    try:
+        function = calls[0]['function']
+        name = function['name']
+        args = json.loads(function.get('arguments') or '{}')
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return name if name in available and args == {} else None

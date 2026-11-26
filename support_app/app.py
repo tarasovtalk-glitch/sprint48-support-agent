@@ -13,10 +13,10 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
-from .chat import buttons, customer_text, intent_cues, run_turn
+from .chat import buttons, customer_text, intent_cues, run_turn, tool_request
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .model import classify
+from .model import choose_tool, classify
 from .scenario import load_scenario
 from .selection import catalog_router
 from .store import (
@@ -163,15 +163,19 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 raise HTTPException(422, 'This stand accepts chat messages only.')
             with store.connect() as db:
                 existing_context = chat_state(db, case_id)
+            plan = tool_request(payload.text or '', payload.action, payload.value, existing_context)
+            model_options = {'api_key': model_key, 'model_uri': model_uri, 'daily': daily_limit, 'total': total_limit}
+            selected_tool = choose_tool(store, case_id, *plan, **model_options) if plan else None
             cues = intent_cues(payload.text) if payload.text and not existing_context else ''
-            hint = classify(store, case_id, cues, api_key=model_key, model_uri=model_uri,
-                            daily=daily_limit, total=total_limit) if cues else 'unknown'
+            hint = classify(store, case_id, cues, **model_options) if cues and not plan else 'unknown'
             with store.connect(write=True) as db:
                 state = chat_state(db, case_id)
+                if selected_tool:
+                    append_event(db, case_id, 'model_tool_selected', selected_tool)
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
                 reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
                                           text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,
-                                          page_url=payload.page_url)
+                                          page_url=payload.page_url, tool=selected_tool)
                 save_chat_state(db, case_id, state)
                 reply_buttons = buttons(choices)
                 agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)

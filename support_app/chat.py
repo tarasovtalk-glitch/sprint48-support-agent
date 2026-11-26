@@ -12,6 +12,8 @@ from .store import append_event
 
 CRYPTO_WORKSTATION = '410137'
 CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
+NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
+REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
 REGISTRY_REFERENCES = (
     ('kaspersky security для почтовых серверов', '203', 'https://reestr.digital.gov.ru/reestr/?EX_PAGE_N=74&EX_PAGE_S=20&PAGE_N=1&PAGE_S=100&SORT_BY=DATE&SORT_TYPE=asc'),
     ('dr.web curenet', '40', 'https://company.drweb.ru/about_doctorweb/'),
@@ -43,6 +45,28 @@ def intent_cues(text: str) -> str:
         return ''
     tokens = [w for w in PRODUCT_WORDS.findall(query) if w in INTENT_CUES]
     return ' '.join(tokens[:20]) if len(tokens) >= 2 else ''
+
+
+def tool_request(text: str, action: str | None, value: str, state: dict):
+    """Return only scenario facts suitable for the model, never the customer's raw input."""
+    query = normalize(text)
+    if state.get('flow') == 'needs':
+        if REGISTRY_QUERY.search(query) and state.get('term') and state.get('deployment'):
+            return ('Клиент спрашивает, есть ли российский аналог и запись в реестре отечественного ПО. Требования уже собраны.',
+                    ('check_registry', 'search_catalog'))
+        if action == 'deployment' and value in {'local', 'cloud', 'flexible'} and state.get('term') and state.get('quantity'):
+            return ('Клиент выбрал размещение. Задача, срок лицензии и количество уже известны. Можно искать в каталоге.',
+                    ('search_catalog', 'clarify_requirements'))
+        if (action == 'select_offer' and value in state.get('offered_ids', [])) or (state.get('awaiting_customer') and text):
+            return ('Клиент выбрал позицию или заполняет реквизиты для черновика КП. Нужно подготовить КП для менеджера; недостающие поля уточнит система.',
+                    ('draft_quote', 'clarify_requirements'))
+    if NEEDS_QUERY.search(query):
+        return ('Клиенту нужно ПО для защиты почты или файлов. Срок и размещение ещё не подтверждены. Сначала нужно уточнить требования.',
+                ('clarify_requirements', 'search_catalog'))
+    if action == 'handoff' or re.search(r'позовите оператора|свяжите с менеджером|запросить цену|тендер', query):
+        return ('Клиент просит подключить оператора или требует согласования менеджера. Нужна передача оператору.',
+                ('contact_manager', 'clarify_requirements'))
+    return None
 
 
 def chat_price(kopecks: int) -> str:
@@ -148,6 +172,7 @@ def queue_quote(db, row, state, catalog: Path):
         'source_date': product['source_date'],
     }
     state['awaiting_customer'] = False
+    append_event(db, row['id'], 'quote_amount_calculated', str(state['quote']['amount_kopecks']))
     message = enter_queue(db, row, state, 'quote_review')
     return f'Сумма по каталогу: {chat_price(state["quote"]["amount_kopecks"])}. {message}', []
 
@@ -168,7 +193,7 @@ def registry_selection(db, req):
     return matches
 
 
-def collect_selection(state, catalog: Path, registry=False):
+def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     if not catalog.is_file():
         return 'Каталог ещё недоступен. Могу позвать оператора.', JOIN_MANAGER
     if state['flow'] == 'needs':
@@ -184,11 +209,12 @@ def collect_selection(state, catalog: Path, registry=False):
     req = Selection(mode='known' if state['flow'] == 'mdaemon' else 'needs',
                     query=query, product='MDaemon Standard' if state['flow'] == 'mdaemon' else '',
                     users=state['quantity'], term_months=state['term'], deployment=state['deployment'], require_registry=registry)
-    with closing(read_only(catalog)) as db:
-        result = selection_result(db, req)
+    append_event(db, case_id, 'registry_lookup' if registry else 'catalog_search', req.mode)
+    with closing(read_only(catalog)) as catalog_db:
+        result = selection_result(catalog_db, req)
         if registry:
             enriched = {g['topic']: g for g in result['groups']}
-            for group in registry_selection(db, req):
+            for group in registry_selection(catalog_db, req):
                 enriched.setdefault(group['topic'], group)
             result['groups'] = list(enriched.values())
     shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
@@ -209,11 +235,14 @@ def collect_selection(state, catalog: Path, registry=False):
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 
-def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url=''):
+def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url='', tool=None):
     query = normalize(text)
     count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|рабочих\s+мест|узл|ящик|мест)', query)
     if count:
         state['quantity'] = int(count.group(1))
+    if tool == 'contact_manager':
+        append_event(db, row['id'], 'model_tool_executed', tool)
+        return enter_queue(db, row, state, 'model_routing'), []
     if state.get('awaiting_customer') and text:
         match = re.search(r'(?<!\d)(?:\d{12}|\d{10})(?!\d)', text)
         if match:
@@ -221,6 +250,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             if name:
                 state['customer'] = name[:100]
             state['inn'] = match.group()
+            if tool == 'draft_quote' and state.get('customer'):
+                append_event(db, row['id'], 'model_tool_executed', tool)
             return queue_quote(db, row, state, catalog)
     if action == 'handoff' or re.search(r'оператор|тендер|госзакупк|запросить цену', query):
         return enter_queue(db, row, state, 'customer_request'), []
@@ -243,8 +274,12 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state.pop('offered_ids', None)
     if 'mdaemon' in query:
         state.update(flow='mdaemon', query=text)
-    if re.search(r'защит.*(?:почт|файл)|(?:почт|файл).*защит', query):
+    if NEEDS_QUERY.search(query):
+        append_event(db, row['id'], 'requirements_understood', 'software_protection')
         state.update(flow='needs', query=text)
+        if tool == 'clarify_requirements':
+            append_event(db, row['id'], 'model_tool_executed', tool)
+            return collect_selection(state, catalog, db, row['id'])
     if action == 'placement' or (state.get('flow') == 'cryptopro' and re.search(r'рабоч\w*\s+мест|\bсервер\w*', query)):
         placement = value if action == 'placement' else 'server' if 'сервер' in query else 'workstation'
         if placement == 'server':
@@ -262,6 +297,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             return f'{line}\nНа {state["quantity"]} шт. — {chat_price(amount)}. Для КП укажите организацию и ИНН.', [('Подготовить КП', 'quote', '')]
         return f'{line}\nСколько рабочих мест?', [('Подготовить КП', 'quote', '')]
     if action == 'select_offer' and value in state.get('offered_ids', []):
+        if tool == 'draft_quote':
+            append_event(db, row['id'], 'model_tool_executed', tool)
         state['offer_id'] = value
         return queue_quote(db, row, state, catalog)
     if action == 'quote' or (state.get('offer_id') and ('кп' in query or 'коммерческ' in query)):
@@ -278,7 +315,17 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['deployment'] = value
         if action == 'focus' and value in {'mail', 'all'}:
             state['focus'] = value
-        return collect_selection(state, catalog, bool(re.search(r'российск|отечествен|реестр', query)))
+        registry = bool(REGISTRY_QUERY.search(query))
+        ready = bool(state.get('quantity') and state.get('term') and state.get('deployment') and
+                     (state['flow'] != 'needs' or state.get('focus')))
+        if ready:
+            if tool == 'check_registry' and registry:
+                append_event(db, row['id'], 'model_tool_executed', tool)
+                return collect_selection(state, catalog, db, row['id'], registry=True)
+            if tool == 'search_catalog' and not registry:
+                append_event(db, row['id'], 'model_tool_executed', tool)
+                return collect_selection(state, catalog, db, row['id'])
+        return collect_selection(state, catalog, db, row['id'], registry)
     candidates = resolve_product(catalog, text, state.get('quantity'), page_url)
     if candidates:
         if len(candidates) == 1 and (not candidates[0]['available'] or candidates[0]['price_kopecks'] is None):
