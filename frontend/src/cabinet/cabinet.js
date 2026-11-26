@@ -273,7 +273,7 @@
     return '<div class="events">' + (list || []).map(function (e) {
       var who = e.actor === 'agent' ? BOT + '<span class="event__name">Агент</span>' : personAvatar(e.name) + '<span class="event__name">' + t(e.name || (e.actor === 'manager' ? 'Менеджер' : 'Клиент')) + '</span>';
       return '<div class="event"><div class="event__head">' + who + '<span class="event__time">' + hhmm(e.time) + '</span></div><p>' + t(e.text) + '</p>' +
-        (e.source ? '<p class="event__source">' + t(e.source) + '</p>' : '') + '</div>';
+        (e.source ? '<p class="event__source">' + t(e.source) + '</p>' : '') + (e.steps ? '<p class="event__steps">' + t(e.steps) + '</p>' : '') + '</div>';
     }).join('') + '</div>';
   }
 
@@ -367,7 +367,13 @@
         '<button class="btn btn--primary" type="button" data-act="jfix" data-id="' + esc(it.id) + '"' + (d.fix.trim() ? '' : ' disabled') + '>Сохранить поправку</button>' +
         '<button class="link" type="button" data-act="jok" data-id="' + esc(it.id) + '">Агент ответил верно</button></div></div>';
     }
-    if (it.cost_rub != null || it.manager_min != null) {
+    // расход модели по журналу обращения: число вызовов и рубли с НДС, мелкие суммы до десятитысячных
+    if (it.model_calls != null) {
+      var spent = it.model_calls ? it.model_calls + ' ' + plural(it.model_calls, 'вызов', 'вызова', 'вызовов') + ', ' +
+        (Math.round(it.model_cost_rub * 10000) / 10000).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ' ₽ с НДС'
+        : 'не вызывалась, ответы по правилам и каталогу';
+      h += '<div class="detail__cost"><span class="fact"><span class="fact__label">Модель</span><span class="fact__value">' + t(spent) + '</span></span></div>';
+    } else if (it.cost_rub != null || it.manager_min != null) {
       h += '<div class="detail__cost">' + (it.cost_rub != null ? '<span class="fact"><span class="fact__label">Работа агента</span><span class="fact__value">' + rub(it.cost_rub) + '</span></span>' : '') +
         (it.manager_min != null ? '<span class="fact"><span class="fact__label">Время менеджера</span><span class="fact__value">' + it.manager_min + ' мин</span></span>' : '') + '</div>';
     }

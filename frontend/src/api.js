@@ -196,13 +196,58 @@
     });
   }
 
-  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем. Имени клиента сервер не знает
+  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем. Имени клиента сервер не знает.
+  // Журнал обращения (GET /manager/cases/{id}/journal) добавляет под репликой агента его шаги: какой инструмент
+  // выбрала модель (model_tool_executed), что сделал сервер (поиск, реестр, расчёт, передача), и расход модели (usage)
   var ACTOR = { client: 'Клиент', manager: 'Менеджер' };
+  var TOOL = { clarify_requirements: 'уточнение требований', search_catalog: 'поиск по каталогу', check_registry: 'проверка реестра',
+    draft_quote: 'черновик КП', contact_manager: 'передача менеджеру' };
+  function rubText(kopecks) { return (Math.round(+kopecks) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, '\u00a0') + '\u00a0₽'; }
+  function step(e) {
+    var d = e.detail || '';
+    switch (e.event) {
+      case 'model_tool_executed': return { key: d, model: true, text: TOOL[d] || d };
+      case 'catalog_search': return { key: 'search_catalog', text: 'поиск по каталогу' };
+      case 'registry_lookup': return { key: 'check_registry', text: 'проверка реестра' };
+      case 'quote_amount_calculated': return { key: 'calc', text: 'расчёт ' + rubText(d) };
+      case 'price_calculated': return { key: 'calc', text: 'расчёт цены' };
+      case 'sent_to_manager': return { key: 'contact_manager', text: d === 'quote_review' ? 'КП передано менеджеру на проверку'
+        : 'передача менеджеру' + (REASON[d] ? ': ' + REASON[d].title.charAt(0).toLowerCase() + REASON[d].title.slice(1) : '') };
+      case 'demo_coupon_offered': return { key: 'coupon', text: 'купон ' + d + '%' };
+      case 'model_unavailable': return { key: 'down', text: 'модель не ответила, ответ по правилам' };
+      case 'model_budget_exceeded': return { key: 'limit', text: 'лимит модели исчерпан, ответ по правилам' };
+    }
+    return null;
+  }
+  // шаги одной реплики: «Модель выбрала: черновик КП. Сделано: расчёт 70 300 ₽, передача менеджеру: проверить КП»
+  function stepsLine(list) {
+    var chosen = {}, model = [], done = [];
+    list.forEach(function (s) { if (s.model && !chosen[s.key]) { chosen[s.key] = true; model.push(s.text); } });
+    list.forEach(function (s) { if (!s.model && !chosen[s.key] && done.indexOf(s.text) < 0) done.push(s.text); });
+    return (model.length ? 'Модель выбрала: ' + model.join(', ') + '.' : '') + (model.length && done.length ? ' ' : '') + (done.length ? 'Сделано: ' + done.join(', ') : '');
+  }
+  function toEvents(messages, journal) {
+    var steps = (journal || []).map(function (e) { var s = step(e); if (s) s.at = e.created || ''; return s; }).filter(Boolean), k = 0;
+    return (messages || []).map(function (m) {
+      var ev = { actor: m.role, name: ACTOR[m.role], text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : ''), time: utc(m.created) };
+      if (m.role !== 'client') {
+        // шаги, записанные до этой реплики (время в журнале с точностью до секунды)
+        var mine = []; while (k < steps.length && steps[k].at <= (m.created || '')) mine.push(steps[k++]);
+        var line = stepsLine(mine); if (line) ev.steps = line;
+      }
+      return ev;
+    });
+  }
   function events(id) {
-    return manager('GET', '/manager/cases/' + encodeURIComponent(id) + '/messages').then(function (r) {
-      return { events: (r.messages || []).map(function (m) {
-        return { actor: m.role, name: ACTOR[m.role], text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : ''), time: utc(m.created) };
-      }) };
+    var path = '/manager/cases/' + encodeURIComponent(id);
+    return manager('GET', path + '/journal').then(function (r) {
+      var usage = r.usage || [], cost = 0;
+      usage.forEach(function (u) { cost += +u.cost_microrubles || 0; });
+      return { events: toEvents(r.messages, r.events), model_calls: usage.length, model_cost_rub: cost / 1e6 };
+    }, function (e) {
+      if (e.status !== 404) throw e;
+      // сервер без журнала обращения: только переписка
+      return manager('GET', path + '/messages').then(function (r) { return { events: toEvents(r.messages) }; });
     });
   }
 
