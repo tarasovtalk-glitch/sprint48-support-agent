@@ -20,6 +20,13 @@ REGISTRY_REFERENCES = (
 )
 WORKPLACE_CHOICES = [('Рабочие места', 'placement', 'workstation'), ('Сервер', 'placement', 'server')]
 JOIN_MANAGER = [('Позвать оператора', 'handoff', '')]
+QUOTE_CUSTOMER_PROMPT = (
+    'Для КП укажите название организации, ИНН и КПП. '
+    'Для проверки стенда используйте тестовые реквизиты: ООО «Демо», ИНН 0000000000, КПП 000000000.'
+)
+QUOTE_REQUISITES = re.compile(r'\b(ИНН|КПП)\b[\s:=№]*([0-9][A-Za-z0-9]*)', re.I)
+INN_FORMAT = re.compile(r'(?:[0-9]{10}|[0-9]{12})')
+KPP_FORMAT = re.compile(r'[0-9]{4}[A-Za-z0-9]{2}[0-9]{3}')
 BUTTON_TEXT = {
     ('placement', 'workstation'): 'На рабочие места', ('placement', 'server'): 'На сервер',
     ('term', '12'): 'На 12 месяцев', ('term', '24'): 'На 24 месяца',
@@ -151,14 +158,35 @@ def enter_queue(db, row, state, reason: str) -> str:
     return 'Передал запрос менеджеру. Его ответ появится в этом чате.'
 
 
+def remember_quote_customer(state, text: str):
+    for field, value in QUOTE_REQUISITES.findall(text):
+        if field.upper() == 'ИНН' and INN_FORMAT.fullmatch(value):
+            state['inn'] = value
+        if field.upper() == 'КПП' and KPP_FORMAT.fullmatch(value):
+            state['kpp'] = value.upper()
+    name = QUOTE_REQUISITES.sub(' ', text).strip(' \t\r\n,:;.-')
+    if name == text.strip(' \t\r\n,:;.-'):
+        if KPP_FORMAT.fullmatch(name):
+            state['kpp'] = name.upper()
+            return
+        bare_inn = re.search(r'(?<!\w)([0-9]{10}|[0-9]{12})(?!\w)', name)
+        if bare_inn:
+            state['inn'] = bare_inn[1]
+            name = (name[:bare_inn.start()] + name[bare_inn.end():]).strip(' \t\r\n,:;.-')
+    name = re.sub(r'^(?:название(?: организации)?|организация|компания)\s*:\s*', '', name, flags=re.I)
+    if any(char.isalpha() for char in name) and not re.search(r'\b(?:инн|кпп)\b', name, re.I):
+        state['customer'] = ' '.join(name.split())[:100]
+
+
 def queue_quote(db, row, state, catalog: Path):
     if not state.get('offer_id'):
         return 'Сначала выберите позицию каталога, для которой нужно КП.', []
     if not state.get('quantity'):
         return 'На сколько лицензий подготовить КП?', []
-    if not state.get('customer') or not state.get('inn'):
+    missing = [label for key, label in (('customer', 'название организации'), ('inn', 'ИНН'), ('kpp', 'КПП')) if not state.get(key)]
+    if missing:
         state['awaiting_customer'] = True
-        return 'Укажите название организации и ИНН одним сообщением.', []
+        return (QUOTE_CUSTOMER_PROMPT if len(missing) == 3 else f'Для КП укажите ещё {", ".join(missing)}.'), []
     if row['state'] == 'pending':
         return 'Запрос уже у менеджера. Его ответ появится здесь.', []
     product = lookup(catalog, state['offer_id'])
@@ -166,7 +194,7 @@ def queue_quote(db, row, state, catalog: Path):
         return enter_queue(db, row, state, 'price_confirmation'), []
     quantity = state['quantity']
     state['quote'] = {
-        'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'],
+        'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'], 'kpp': state['kpp'],
         'amount_kopecks': product['price_kopecks'] * quantity, 'vat_kopecks': None,
         'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
         'source_date': product['source_date'],
@@ -243,17 +271,14 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if tool == 'contact_manager':
         append_event(db, row['id'], 'model_tool_executed', tool)
         return enter_queue(db, row, state, 'model_routing'), []
+    if action == 'handoff' or re.search(r'(?:позови|подключи|соедини)\w*\s+(?:с\s+)?(?:оператор|менеджер)', query):
+        return enter_queue(db, row, state, 'customer_request'), []
     if state.get('awaiting_customer') and text:
-        match = re.search(r'(?<!\d)(?:\d{12}|\d{10})(?!\d)', text)
-        if match:
-            name = re.sub(r'\bинн\b\s*[:№]?', '', text[:match.start()], flags=re.I).strip(' ,:;.-')
-            if name:
-                state['customer'] = name[:100]
-            state['inn'] = match.group()
-            if tool == 'draft_quote' and state.get('customer'):
-                append_event(db, row['id'], 'model_tool_executed', tool)
-            return queue_quote(db, row, state, catalog)
-    if action == 'handoff' or re.search(r'оператор|тендер|госзакупк|запросить цену', query):
+        remember_quote_customer(state, text)
+        if tool == 'draft_quote' and all(state.get(field) for field in ('customer', 'inn', 'kpp')):
+            append_event(db, row['id'], 'model_tool_executed', tool)
+        return queue_quote(db, row, state, catalog)
+    if re.search(r'оператор|тендер|госзакупк|запросить цену', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
         return 'Закрывающие документы по заказу проверьте в личном кабинете Store: https://store.softline.ru/ — войдите и откройте заказ. Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
@@ -294,7 +319,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if state.get('quantity'):
             state['awaiting_customer'] = True
             amount = product['price_kopecks'] * state['quantity']
-            return f'{line}\nНа {state["quantity"]} шт. — {chat_price(amount)}. Для КП укажите организацию и ИНН.', [('Подготовить КП', 'quote', '')]
+            return f'{line}\nНа {state["quantity"]} шт. — {chat_price(amount)}. {QUOTE_CUSTOMER_PROMPT}', [('Подготовить КП', 'quote', '')]
         return f'{line}\nСколько рабочих мест?', [('Подготовить КП', 'quote', '')]
     if action == 'select_offer' and value in state.get('offered_ids', []):
         if tool == 'draft_quote':
@@ -306,7 +331,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if state.get('flow') == 'cryptopro':
         if state.get('offer_id') and state.get('quantity'):
             state['awaiting_customer'] = True
-            return 'Для черновика КП укажите название организации и ИНН.', []
+            return QUOTE_CUSTOMER_PROMPT, []
         return 'Лицензии КриптоПро нужны на рабочие места или на сервер?', WORKPLACE_CHOICES
     if state.get('flow') in ('needs', 'mdaemon'):
         if action == 'term' and value in {'12', '24'}:

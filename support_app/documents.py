@@ -42,7 +42,7 @@ def render_pdf(kind: str, offer: dict, font_path: Path) -> bytes:
     return buffer.getvalue()
 
 
-def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path, *, approved=False, inn='') -> bytes:
+def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path, *, approved=False, inn='', kpp='') -> bytes:
     pdfmetrics.registerFont(TTFont('SupportDocument', str(font_path)))
     buffer = BytesIO()
     page = Canvas(buffer, pagesize=A4)
@@ -65,6 +65,8 @@ def render_catalog_quote(offer: dict, customer: str, packages: int, source_date:
     ]
     if inn:
         lines.insert(2, f'ИНН: {inn}')
+    if kpp:
+        lines.insert(3 if inn else 2, f'КПП: {kpp}')
     y = 735
     for line in lines:
         for segment in simpleSplit(line, 'SupportDocument', 11, 480):

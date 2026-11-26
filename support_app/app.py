@@ -271,7 +271,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         if 'catalog_quote' in offer:
             quote = offer['catalog_quote']
             pdf = render_catalog_quote(quote['offer'], quote['customer'], quote['quantity'], quote['source_date'],
-                                       font_path, approved=True, inn=quote['inn'])
+                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''))
         else:
             pdf = render_pdf(row['kind'], offer, font_path)
         return Response(pdf, media_type='application/pdf', headers={
