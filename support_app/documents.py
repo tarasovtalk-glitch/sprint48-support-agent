@@ -42,7 +42,7 @@ def render_pdf(kind: str, offer: dict, font_path: Path) -> bytes:
     return buffer.getvalue()
 
 
-def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path) -> bytes:
+def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path, *, approved=False, inn='') -> bytes:
     pdfmetrics.registerFont(TTFont('SupportDocument', str(font_path)))
     buffer = BytesIO()
     page = Canvas(buffer, pagesize=A4)
@@ -52,9 +52,9 @@ def render_catalog_quote(offer: dict, customer: str, packages: int, source_date:
     page.setFont('SupportDocument', 11)
     price = offer['price_kopecks']
     lines = [
-        'ЧЕРНОВИК ДЛЯ ПРОВЕРКИ МЕНЕДЖЕРОМ',
+        'ДЕМОНСТРАЦИОННОЕ КП. ПРЕДОПЛАТА ПО ОФЕРТЕ.' if approved else 'ЧЕРНОВИК ДЛЯ ПРОВЕРКИ МЕНЕДЖЕРОМ',
         f'Куда: {customer}',
-        f'Артикул: {offer["sku"]}',
+        f'Артикул: {offer["sku"]}' if offer['sku'] else f'ID предложения в фиде: {offer["id"]}. Артикул не указан.',
         f'Наименование: {offer["name"]}',
         f'Кол-во выбранных позиций каталога: {packages}',
         f'Цена за позицию по фиду: {rubles(price)}',
@@ -63,6 +63,8 @@ def render_catalog_quote(offer: dict, customer: str, packages: int, source_date:
         'Срок поставки и срок действия: уточняются менеджером.',
         f'Источник цены: каталог Softline {source_date}.',
     ]
+    if inn:
+        lines.insert(2, f'ИНН: {inn}')
     y = 735
     for line in lines:
         for segment in simpleSplit(line, 'SupportDocument', 11, 480):

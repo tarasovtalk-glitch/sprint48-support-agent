@@ -1,0 +1,188 @@
+import re
+from contextlib import closing
+from decimal import Decimal
+from pathlib import Path
+
+from .catalog import find_matches, normalize, read_only, view
+from .documents import rubles
+from .selection import Selection, selection_result
+from .store import append_event
+
+
+CRYPTO_WORKSTATION = '410137'
+WORKPLACE_CHOICES = [('Рабочие места', 'placement', 'workstation'), ('Сервер', 'placement', 'server')]
+JOIN_MANAGER = [('Позвать оператора', 'handoff', '')]
+BUTTON_TEXT = {
+    ('placement', 'workstation'): 'На рабочие места', ('placement', 'server'): 'На сервер',
+    ('term', '12'): 'На 12 месяцев', ('term', '24'): 'На 24 месяца',
+    ('deployment', 'local'): 'На своих серверах', ('deployment', 'cloud'): 'В облаке',
+    ('deployment', 'flexible'): 'Рассмотрю оба варианта', ('focus', 'mail'): 'Сначала защита почты',
+    ('focus', 'all'): 'И почта, и файлы',
+}
+
+
+def buttons(items):
+    return [{'label': label, 'action': action, 'value': value} for label, action, value in items]
+
+
+def customer_text(text, action, value):
+    return text or BUTTON_TEXT.get((action, value), {
+        'select_offer': 'Выбрана позиция каталога', 'quote': 'Запросить коммерческое предложение',
+        'handoff': 'Позвать оператора', 'deferral': 'Есть ли отсрочка?',
+        'more_discount': 'Нужна скидка больше 5%', 'price': 'Какая цена?', 'invoice': 'Нужен счёт',
+    }.get(action, 'Уточнение по подбору'))
+
+
+def lookup(catalog: Path, offer_id: str):
+    if not catalog.is_file():
+        return None
+    with closing(read_only(catalog)) as db:
+        row = db.execute('SELECT * FROM products WHERE id=?', (offer_id,)).fetchone()
+        if row is None:
+            return None
+        date = db.execute("SELECT value FROM metadata WHERE name='source_date'").fetchone()
+        return {**view(row), 'source_date': date['value'] if date else ''}
+
+
+def enter_queue(db, row, state, reason: str) -> str:
+    if row['state'] == 'pending':
+        return 'Запрос уже у менеджера. Его ответ появится здесь.'
+    state['queue_reason'] = reason
+    db.execute("UPDATE cases SET state='pending',version=version+1,payment_due=NULL WHERE id=?", (row['id'],))
+    append_event(db, row['id'], 'sent_to_manager', reason)
+    return 'Передал запрос менеджеру. Его ответ появится в этом чате.'
+
+
+def queue_quote(db, row, state, catalog: Path):
+    if not state.get('offer_id'):
+        return 'Сначала выберите позицию каталога, для которой нужно КП.', []
+    if not state.get('quantity'):
+        return 'На сколько лицензий подготовить КП?', []
+    if not state.get('customer') or not state.get('inn'):
+        state['awaiting_customer'] = True
+        return 'Укажите название организации и ИНН одним сообщением.', []
+    if row['state'] == 'pending':
+        return 'Запрос уже у менеджера. Его ответ появится здесь.', []
+    product = lookup(catalog, state['offer_id'])
+    if not product or not product['available'] or product['price_kopecks'] is None:
+        return enter_queue(db, row, state, 'price_confirmation'), []
+    quantity = state['quantity']
+    state['quote'] = {
+        'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'],
+        'amount_kopecks': product['price_kopecks'] * quantity, 'vat_kopecks': None,
+        'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
+        'source_date': product['source_date'],
+    }
+    state['awaiting_customer'] = False
+    message = enter_queue(db, row, state, 'quote_review')
+    return f'Сумма по каталогу: {rubles(state["quote"]["amount_kopecks"])} {message}', []
+
+
+def collect_selection(state, catalog: Path, registry=False):
+    if not catalog.is_file():
+        return 'Каталог ещё недоступен. Могу позвать оператора.', JOIN_MANAGER
+    if state['flow'] == 'needs':
+        if not state.get('focus'):
+            return 'Выбираем защиту для почты и файлов вместе или начинаем с почты?', [('И почта, и файлы', 'focus', 'all'), ('Сначала почта', 'focus', 'mail')]
+    if not state.get('term'):
+        return 'На какой срок нужна лицензия?', [('12 месяцев', 'term', '12'), ('24 месяца', 'term', '24')]
+    if not state.get('deployment'):
+        return 'Где будет работать решение?', [('Свои серверы', 'deployment', 'local'), ('Облако', 'deployment', 'cloud'), ('Оба варианта', 'deployment', 'flexible')]
+    if not state.get('quantity'):
+        return 'Сколько пользователей или устройств нужно покрыть?', []
+    query = 'защита почты' if state.get('focus') == 'mail' else state['query']
+    req = Selection(mode='known' if state['flow'] == 'mdaemon' else 'needs',
+                    query=query, product='MDaemon Standard' if state['flow'] == 'mdaemon' else '',
+                    users=state['quantity'], term_months=state['term'], deployment=state['deployment'], require_registry=registry)
+    with closing(read_only(catalog)) as db:
+        result = selection_result(db, req)
+        if registry and not result['groups'] and state['flow'] == 'needs':
+            alternatives = find_matches(db, ['dr', 'web', 'enterprise'], req.users, req.term_months, active_only=True, new_purchase_only=True)
+            verified = [item for item in alternatives if item['registry']]
+            if verified:
+                result['groups'] = [{'topic': 'Рабочие станции и файлы', 'offers': verified[:2]}]
+    shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
+    if not shown:
+        return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
+    state['offered_ids'] = [offer['id'] for _, offer in shown]
+    lines = ['Варианты по данным каталога:']
+    if state['flow'] == 'mdaemon':
+        lines.append('Точное название Standard в фиде не подтверждено. Ниже — MDaemon Messaging Server для проверки.')
+    if registry:
+        lines.append('Номер реестра подтверждает запись из фида. Совместимость с вашими требованиями нужно проверить.')
+    for topic, offer in shown:
+        price = rubles(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
+        registry_text = f', реестр № {offer["registry"]}' if registry else ''
+        lines.append(f'{topic}: {offer["name"]} — {price}{registry_text} {offer["url"] or ""}')
+    return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
+
+
+def run_turn(db, row, state, catalog: Path, *, text='', action=None, value=''):
+    query = normalize(text)
+    count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|рабочих\s+мест|узл|ящик|мест)', query)
+    if count:
+        state['quantity'] = int(count.group(1))
+    if state.get('awaiting_customer') and text:
+        match = re.search(r'(?<!\d)(?:\d{12}|\d{10})(?!\d)', text)
+        if match:
+            name = re.sub(r'\bинн\b\s*[:№]?', '', text[:match.start()], flags=re.I).strip(' ,:;.-')
+            if name:
+                state['customer'] = name[:100]
+            state['inn'] = match.group()
+            return queue_quote(db, row, state, catalog)
+    if action == 'handoff' or re.search(r'оператор|тендер|госзакупк|запросить цену', query):
+        return enter_queue(db, row, state, 'customer_request'), []
+    if re.search(r'закрывающ|\bупд\b', query):
+        return 'Закрывающие документы по заказу проверьте в личном кабинете Store: https://store.softline.ru/ — войдите и откройте заказ. Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
+    match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*%', query)
+    discount = Decimal(match.group(1).replace(',', '.')) if match else None
+    if action == 'more_discount' or re.search(r'(?:больш|выше).{0,35}(?:скид|купон|%)|(?:скид|купон).{0,30}(?:больш|выше)', query) or (discount is not None and discount > 5):
+        return enter_queue(db, row, state, 'discount_over_limit'), []
+    if action == 'deferral' or re.search(r'отсроч|постоплат|скидк|купон', query):
+        percent = discount if discount is not None else 5
+        state['coupon_percent'] = str(percent)
+        append_event(db, row['id'], 'demo_coupon_offered', str(percent))
+        return f'Оплата по оферте — предоплата. Предлагаю демонстрационный купон на {percent}%. За большей скидкой подключу менеджера.', [('Запросить больше', 'more_discount', ''), *JOIN_MANAGER]
+    if 'криптопро' in query or re.search(r'crypto\s*pro', query):
+        state.update(flow='cryptopro', query=text)
+        state.pop('offer_id', None)
+        state.pop('offered_ids', None)
+    if 'mdaemon' in query:
+        state.update(flow='mdaemon', query=text)
+    if re.search(r'защит.*(?:почт|файл)|(?:почт|файл).*защит', query):
+        state.update(flow='needs', query=text)
+    if action == 'placement' or (state.get('flow') == 'cryptopro' and re.search(r'рабоч\w*\s+мест|\bсервер\w*', query)):
+        placement = value if action == 'placement' else 'server' if 'сервер' in query else 'workstation'
+        if placement == 'server':
+            return 'Для сервера нужна другая позиция. ' + enter_queue(db, row, state, 'server_license'), []
+        if placement != 'workstation':
+            return 'Уточните тип лицензии.', WORKPLACE_CHOICES
+        product = lookup(catalog, CRYPTO_WORKSTATION)
+        if not product or not product['available'] or not product['price_kopecks']:
+            return enter_queue(db, row, state, 'catalog_unavailable'), []
+        state['offer_id'] = product['id']
+        line = f'{product["name"]} — {rubles(product["price_kopecks"])} {product["url"]}'
+        if state.get('quantity'):
+            state['awaiting_customer'] = True
+            amount = product['price_kopecks'] * state['quantity']
+            return f'{line}\nНа {state["quantity"]} шт. — {rubles(amount)} Для КП укажите организацию и ИНН.', [('Подготовить КП', 'quote', '')]
+        return f'{line}\nСколько рабочих мест?', [('Подготовить КП', 'quote', '')]
+    if action == 'select_offer' and value in state.get('offered_ids', []):
+        state['offer_id'] = value
+        return queue_quote(db, row, state, catalog)
+    if action == 'quote' or (state.get('offer_id') and ('кп' in query or 'коммерческ' in query)):
+        return queue_quote(db, row, state, catalog)
+    if state.get('flow') == 'cryptopro':
+        if state.get('offer_id') and state.get('quantity'):
+            state['awaiting_customer'] = True
+            return 'Для черновика КП укажите название организации и ИНН.', []
+        return 'Лицензии КриптоПро нужны на рабочие места или на сервер?', WORKPLACE_CHOICES
+    if state.get('flow') in ('needs', 'mdaemon'):
+        if action == 'term' and value in {'12', '24'}:
+            state['term'] = int(value)
+        if action == 'deployment' and value in {'local', 'cloud', 'flexible'}:
+            state['deployment'] = value
+        if action == 'focus' and value in {'mail', 'all'}:
+            state['focus'] = value
+        return collect_selection(state, catalog, bool(re.search(r'российск|отечествен|реестр', query)))
+    return 'Помогу подобрать ПО или позову оператора. Напишите название продукта или расскажите, какую задачу нужно решить.', JOIN_MANAGER

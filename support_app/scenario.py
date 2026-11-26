@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field, model_validator
 class Scenario(BaseModel):
     source: str = Field(min_length=1, max_length=150)
     as_of: date
-    price_until: date
-    license_until: date
+    price_until: date | None
+    license_until: date | None
     customer: str = Field(min_length=1, max_length=80)
     contract_ref: str = Field(min_length=1, max_length=80)
     previous_order: str = Field(min_length=1, max_length=60)
@@ -21,7 +21,7 @@ class Scenario(BaseModel):
 
     @model_validator(mode='after')
     def check_dates(self):
-        if self.price_until < self.as_of or self.license_until <= self.as_of:
+        if (self.price_until and self.price_until < self.as_of) or (self.license_until and self.license_until <= self.as_of):
             raise ValueError('Scenario needs a current quote and a non-expired license.')
         return self
 

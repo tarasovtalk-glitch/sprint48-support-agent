@@ -10,15 +10,19 @@ from threading import Event, Thread
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
-from pydantic import BaseModel, Field, StrictBool, model_validator
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
-from .documents import render_pdf, rubles
+from .chat import buttons, customer_text, run_turn
+from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .model import classify
 from .scenario import load_scenario
 from .selection import catalog_router
-from .store import Store, append_event, case_view, queue_mail
+from .store import (
+    Store, append_event, case_view, chat_state, queue_mail,
+    read_chat_messages, save_chat_message, save_chat_state,
+)
 
 
 PREFIX = '/support/api'
@@ -28,7 +32,9 @@ DEMO_SOURCE = Path(__file__).with_name('demo.json')
 
 class Message(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=1000)
-    action: Literal['price', 'quote', 'invoice', 'deferral'] | None = None
+    action: Literal['price', 'quote', 'invoice', 'deferral', 'placement', 'focus', 'term',
+                    'deployment', 'select_offer', 'handoff', 'more_discount'] | None = None
+    value: str = Field(default='', max_length=32)
     channel: Literal['chat', 'email', 'call_demo'] = 'chat'
 
     @model_validator(mode='after')
@@ -46,7 +52,7 @@ class Decision(BaseModel):
     choice: Literal['approve', 'reject']
     version: int = Field(ge=0)
     request_id: UUID
-    note: str = Field(default='', max_length=400)
+    note: str = Field(default='', max_length=400, validation_alias=AliasChoices('reply', 'note'))
 
 
 class RuleConfirmation(BaseModel):
@@ -88,7 +94,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     font_path = Path(os.environ.get('SUPPORT_PDF_FONT', font_default))
     if not font_path.is_file():
         raise ValueError('SUPPORT_PDF_FONT must point to a TrueType font.')
-    smtp_host = os.environ.get('SUPPORT_SMTP_HOST', '')
+    chat_only = os.environ.get('SUPPORT_CHAT_ONLY', '1') == '1'
+    smtp_host = '' if chat_only else os.environ.get('SUPPORT_SMTP_HOST', '')
     smtp_port = int(os.environ.get('SUPPORT_SMTP_PORT', '1025'))
 
     @asynccontextmanager
@@ -143,8 +150,26 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         with store.connect() as db:
             return case_view(get_case(db, case_id))
 
+    @app.get(PREFIX + '/case/messages')
+    def client_messages(after: int | None = Query(default=None, ge=0), case_id: str = Depends(client)):
+        with store.connect() as db:
+            return {'messages': read_chat_messages(db, case_id, after)}
+
     @app.post(PREFIX + '/case/messages')
     def message(payload: Message, case_id: str = Depends(client)):
+        if chat_only:
+            if payload.channel != 'chat':
+                raise HTTPException(422, 'This stand accepts chat messages only.')
+            with store.connect(write=True) as db:
+                state = chat_state(db, case_id)
+                client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
+                reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
+                                          text=payload.text or '', action=payload.action, value=payload.value)
+                save_chat_state(db, case_id, state)
+                reply_buttons = buttons(choices)
+                agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
+                return {'reply': reply, 'intent': 'chat', 'document_url': None, 'buttons': reply_buttons,
+                        'case': case_view(get_case(db, case_id)), 'messages': [client_entry, agent_entry]}
         intent = payload.action or classify(store, case_id, payload.text, api_key=model_key, model_uri=model_uri, daily=daily_limit, total=total_limit)
         document_url = None
         with store.connect(write=True) as db:
@@ -202,7 +227,13 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             ''', (token_hash(access_id), int(time.time()))).fetchone()
         if not row:
             raise HTTPException(404, 'Document not found.')
-        pdf = render_pdf(row['kind'], json.loads(row['offer']), font_path)
+        offer = json.loads(row['offer'])
+        if 'catalog_quote' in offer:
+            quote = offer['catalog_quote']
+            pdf = render_catalog_quote(quote['offer'], quote['customer'], quote['quantity'], quote['source_date'],
+                                       font_path, approved=True, inn=quote['inn'])
+        else:
+            pdf = render_pdf(row['kind'], offer, font_path)
         return Response(pdf, media_type='application/pdf', headers={
             'Content-Disposition': f'attachment; filename="{row["kind"]}.pdf"',
             'Referrer-Policy': 'no-referrer',
@@ -213,7 +244,17 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     def queue():
         with store.connect() as db:
             rows = db.execute("SELECT * FROM cases WHERE state='pending' ORDER BY rowid DESC LIMIT 50").fetchall()
-        return {'cases': [case_view(row) for row in rows]}
+            cases = []
+            for row in rows:
+                state = chat_state(db, row['id'])
+                cases.append({**case_view(row), 'reason': state.get('queue_reason'), 'quote': state.get('quote') if state.get('queue_reason') == 'quote_review' else None})
+            return {'cases': cases}
+
+    @app.get(PREFIX + '/manager/cases/{case_id}/messages', dependencies=[Depends(manager)])
+    def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0)):
+        with store.connect() as db:
+            get_case(db, case_id)
+            return {'messages': read_chat_messages(db, case_id, after)}
 
     @app.post(PREFIX + '/manager/cases/{case_id}/decision', dependencies=[Depends(manager)])
     def decide(case_id: str, decision: Decision):
@@ -222,16 +263,36 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             if row['decision_key'] == str(decision.request_id):
                 if row['decision_choice'] != decision.choice or row['version'] != decision.version + 1 or row['decision_note'] != decision.note:
                     raise HTTPException(409, 'Request ID was already used.')
-                return case_view(row)
+                result = case_view(row)
+                if chat_only:
+                    entry = db.execute("SELECT document_url FROM chat_messages WHERE case_id=? AND role='manager' ORDER BY id DESC LIMIT 1", (case_id,)).fetchone()
+                    result['document_url'] = entry['document_url'] if entry else None
+                return result
             if row['state'] != 'pending' or row['version'] != decision.version:
                 raise HTTPException(409, 'This request has changed. Reload the case.')
             offer = json.loads(row['offer'])
             approved = decision.choice == 'approve'
             state = 'approved' if approved else 'rejected'
+            payment_due = due_date(offer) if approved and not chat_only else None
             db.execute('''
                 UPDATE cases SET state=?, version=version+1, payment_due=?, decision_key=?, decision_choice=?, decision_note=? WHERE id=?
-            ''', (state, due_date(offer) if approved else None, str(decision.request_id), decision.choice, decision.note, case_id))
+            ''', (state, payment_due, str(decision.request_id), decision.choice, decision.note, case_id))
             append_event(db, case_id, 'manager_decision', state)
+            if chat_only:
+                context = chat_state(db, case_id)
+                quote = context.get('quote') if context.get('queue_reason') == 'quote_review' else None
+                document_url = None
+                if approved and quote:
+                    token = secrets.token_urlsafe(32)
+                    db.execute('INSERT INTO documents VALUES(?,?,?,?,?,?)', (
+                        token_hash(token), case_id, 'quote', json.dumps({'catalog_quote': quote}),
+                        int(time.time()) + DOCUMENT_TTL, row['version'] + 1,
+                    ))
+                    document_url = f'{PREFIX}/documents/{token}'
+                    append_event(db, case_id, 'catalog_quote_sent')
+                default = 'Коммерческое предложение готово.' if document_url else 'Менеджер рассмотрел запрос.'
+                save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
+                return {**case_view(get_case(db, case_id)), 'document_url': document_url}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
                 queue_mail(db, case_id, 'approved', offer)
@@ -239,6 +300,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     @app.post(PREFIX + '/manager/cases/{case_id}/rule', dependencies=[Depends(manager)])
     def create_rule(case_id: str, payload: RuleConfirmation):
+        if chat_only:
+            raise HTTPException(409, 'Automatic deferral rules are disabled in chat-only mode.')
         if not payload.confirmed:
             raise HTTPException(422, 'Confirm creation of a contract rule.')
         with store.connect(write=True) as db:
@@ -268,7 +331,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             get_case(db, case_id)
             events = db.execute('SELECT event,detail,created FROM journal WHERE case_id=? ORDER BY id', (case_id,)).fetchall()
             usage = db.execute('SELECT input_tokens,output_tokens,cost_microrubles FROM model_usage WHERE case_id=? AND input_tokens IS NOT NULL ORDER BY id', (case_id,)).fetchall()
-        return {'events': [dict(e) for e in events], 'usage': [dict(u) for u in usage]}
+            messages = read_chat_messages(db, case_id)
+        return {'events': [dict(e) for e in events], 'usage': [dict(u) for u in usage], 'messages': messages}
 
     return app
 

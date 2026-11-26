@@ -31,6 +31,20 @@ CREATE TABLE IF NOT EXISTS documents (
     expires_at INTEGER NOT NULL,
     case_version INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_state (
+    case_id TEXT PRIMARY KEY REFERENCES cases(id),
+    data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id),
+    role TEXT NOT NULL CHECK (role IN ('client','agent','manager')),
+    text TEXT NOT NULL,
+    document_url TEXT,
+    buttons TEXT NOT NULL DEFAULT '[]',
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS chat_messages_case ON chat_messages (case_id,id);
 CREATE TABLE IF NOT EXISTS rules (
     customer TEXT NOT NULL,
     contract_ref TEXT NOT NULL,
@@ -108,6 +122,33 @@ class Store:
 
 def append_event(db: sqlite3.Connection, case_id: str, event: str, detail: str = ''):
     db.execute('INSERT INTO journal(case_id,event,detail) VALUES (?,?,?)', (case_id, event, detail))
+
+
+def chat_state(db, case_id: str) -> dict:
+    row = db.execute('SELECT data FROM chat_state WHERE case_id=?', (case_id,)).fetchone()
+    return json.loads(row['data']) if row else {}
+
+
+def save_chat_state(db, case_id: str, state: dict):
+    db.execute('''INSERT INTO chat_state(case_id,data) VALUES (?,?)
+                  ON CONFLICT(case_id) DO UPDATE SET data=excluded.data''', (case_id, json.dumps(state, ensure_ascii=False)))
+
+
+def save_chat_message(db, case_id: str, role: str, text: str, *, document_url=None, buttons=()):
+    cur = db.execute('INSERT INTO chat_messages(case_id,role,text,document_url,buttons) VALUES(?,?,?,?,?)',
+                     (case_id, role, text, document_url, json.dumps(buttons, ensure_ascii=False)))
+    row = db.execute('SELECT id,role,text,document_url,buttons,created FROM chat_messages WHERE id=?', (cur.lastrowid,)).fetchone()
+    return {**dict(row), 'buttons': json.loads(row['buttons'])}
+
+
+def read_chat_messages(db, case_id: str, after: int | None = None):
+    if after is None:
+        rows = reversed(db.execute('''SELECT id,role,text,document_url,buttons,created FROM chat_messages
+                                      WHERE case_id=? ORDER BY id DESC LIMIT 200''', (case_id,)).fetchall())
+    else:
+        rows = db.execute('''SELECT id,role,text,document_url,buttons,created FROM chat_messages
+                             WHERE case_id=? AND id>? ORDER BY id LIMIT 200''', (case_id, after)).fetchall()
+    return [{**dict(row), 'buttons': json.loads(row['buttons'])} for row in rows]
 
 
 def queue_mail(db: sqlite3.Connection, case_id: str, kind: str, offer: dict):
