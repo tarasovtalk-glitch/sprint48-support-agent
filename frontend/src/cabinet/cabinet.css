@@ -17,7 +17,7 @@
   --accent-soft:rgba(0,122,255,.14);--accent-soft-hover:rgba(0,122,255,.2);--accent-soft-pressed:rgba(0,122,255,.28);
   --avatar-soft:#e2f0fe;--avatar-ink:#2263a8;
   --success:#2f9e44;--success-soft:#ebfbee;--success-ink:#1e7b34;
-  --danger:#a50f2d;--input-line:#a6cdfa;--input-hover:#6faef7;--disabled-ink:#adabb3;
+  --danger:#a50f2d;--danger-soft:#f9e9ec;--input-line:#a6cdfa;--input-hover:#6faef7;--disabled-ink:#adabb3;
   /* состояния */
   --plate-hover:#eeedf0;--plate-pressed:#e6e5ea;--button-hover:#d8d7dd;--button-pressed:#cdccd3;
   --tooltip:#2b2734;--tooltip-muted:#bebbc6;--scrim:rgba(29,26,36,.32);
@@ -93,7 +93,8 @@ b,strong{font-weight:500}
 
 /* ---------- состояние агента ---------- */
 .status{display:flex;align-items:center;gap:12px;height:48px;padding:12px 10px 12px 16px;border-radius:24px;background:var(--success-soft);color:var(--success-ink);font:400 16px/24px var(--font);transition:background-color var(--t-state) var(--ease)}
-.status--paused{background:var(--panel);color:var(--ink)}
+/* пауза: тот же блок, что «Агент работает», только красный */
+.status--paused{background:var(--danger-soft);color:var(--danger)}
 .status--plain{background:none;padding:0;gap:16px;font:500 14px/20px var(--font);color:var(--ink)}
 .switch{position:relative;flex:none;width:36px;height:20px;border-radius:10px;background:var(--button);transition:background-color var(--t-state) var(--ease)}
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform var(--t-pop) var(--ease)}
@@ -103,6 +104,8 @@ b,strong{font-weight:500}
 .switch:hover{background:var(--button-hover)}
 .switch[aria-checked="true"]:hover{background:var(--accent-hover)}
 .switch--agent[aria-checked="true"]:hover{background:#25843a}
+.status--paused .switch--agent{background:var(--danger)}
+.status--paused .switch--agent:hover{background:#8a0c25}
 .switch:focus-visible{box-shadow:var(--ring)}
 .switch:disabled{cursor:default;opacity:.5}
 
@@ -316,7 +319,8 @@ button.plate:active{background:var(--plate-pressed)}
 /* ---------- Агент ---------- */
 .agent{display:flex;flex-direction:column;gap:28px}
 .agent-cols{display:grid;grid-template-columns:minmax(0,846fr) minmax(0,434fr);gap:24px;align-items:start}
-.settings-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+/* карточки настроек в одном ряду одной высоты, по самой высокой */
+.settings-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:stretch}
 .col{display:flex;flex-direction:column;gap:24px;min-width:0}
 .total{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .split{display:flex;gap:2px;height:8px}
@@ -377,9 +381,11 @@ button.option:focus-visible{box-shadow:var(--ring)}
 .options.is-off .option{opacity:.5}
 .fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .hours{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.hours .select{padding-left:14px;padding-right:10px}
+.hours>.muted{margin:0 -4px}
 /* поле срока и часы в одну строку, а если панели не хватает ширины, часы целиком уходят строкой ниже */
-.fields--hours{display:flex;flex-wrap:wrap;gap:16px}
-.fields--hours>.label:first-child{flex:1 1 264px}
+.fields--hours{display:flex;flex-wrap:wrap;gap:12px}
+.fields--hours>.label:first-child{flex:1 1 256px}
 .fields--hours>.label:last-child{flex:0 0 auto}
 
 /* ---------- предупреждение над разделом ---------- */
