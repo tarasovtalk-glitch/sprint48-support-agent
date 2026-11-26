@@ -1,0 +1,801 @@
+{
+ "taken": "2026-11-26T12:53:24.178Z",
+ "cases": [
+  {
+   "id": "bca1d48fdfb24d4690c4d0edc6e028e9",
+   "state": "open",
+   "version": 0,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "",
+   "reason": null,
+   "quote": null,
+   "created": "2026-11-26 12:53:19",
+   "updated": "2026-11-26 12:53:24",
+   "first_client_message": "MDaemon на 10 пользователей, сколько стоит?"
+  },
+  {
+   "id": "28e5750cdeb9445f92db97258e870ea6",
+   "state": "open",
+   "version": 0,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "",
+   "reason": null,
+   "quote": null,
+   "created": "2026-11-26 12:53:18",
+   "updated": "2026-11-26 12:53:19",
+   "first_client_message": "Где закрывающие документы по заказу?"
+  },
+  {
+   "id": "cd0b99a3b4c94c4d86807ce4ebbe3c7d",
+   "state": "approved",
+   "version": 2,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "Здравствуйте! Пришлите номер закупки, подготовлю КП по её условиям и отвечу здесь.",
+   "reason": "customer_request",
+   "quote": null,
+   "created": "2026-11-26 12:53:16",
+   "updated": "2026-11-26 12:53:18",
+   "first_client_message": "Мы проводим госзакупку на антивирус, нужен менеджер"
+  },
+  {
+   "id": "4d094ba680ea4040806b66b0f2efa3a2",
+   "state": "pending",
+   "version": 1,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "",
+   "reason": "discount_over_limit",
+   "quote": null,
+   "created": "2026-11-26 12:53:14",
+   "updated": "2026-11-26 12:53:16",
+   "first_client_message": "Здравствуйте, нужен MDaemon на 10 пользователей. Можно оплатить с отсрочкой?"
+  },
+  {
+   "id": "3f32729f623341b0a0308cd6a0afcef7",
+   "state": "approved",
+   "version": 2,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "",
+   "reason": "quote_review",
+   "quote": {
+    "offer": {
+     "id": "3853",
+     "family": "3707",
+     "name": "Kaspersky Security для почтовых серверов базовая лицензия на 1 год по количеству почтовых адресов",
+     "vendor": "«Лаборатория Касперского»",
+     "category": "Антивирусы для организаций",
+     "sku": "KL4313RATFS",
+     "url": "https://store.softline.ru/kaspersky/kl4313ratfs-3853/",
+     "price_kopecks": 123660,
+     "available": true,
+     "min_users": null,
+     "max_users": null,
+     "term_months": 12,
+     "registry": null,
+     "parameters": {
+      "Способ доставки": "Электронный",
+      "Тип лицензии": "Полная версия",
+      "Тип организации": "Коммерческая",
+      "Пользователь": "Юрлицо",
+      "Срок действия": "12 мес."
+     },
+     "new_purchase": 1,
+     "source_date": "2026-11-25 14:12"
+    },
+    "quantity": 50,
+    "customer": "ООО «Демо»",
+    "inn": "0000000000",
+    "kpp": "000000000",
+    "amount_kopecks": 6183000,
+    "vat_kopecks": null,
+    "vat_status": "НДС уточняется менеджером",
+    "payment_terms": "Предоплата по оферте",
+    "source_date": "2026-11-25 14:12"
+   },
+   "created": "2026-11-26 12:53:06",
+   "updated": "2026-11-26 12:53:14",
+   "first_client_message": "Нужно защитить почту и файлы на 50 сотрудников"
+  },
+  {
+   "id": "8487a6bfae6743d88e546f8307798189",
+   "state": "pending",
+   "version": 1,
+   "offer": {
+    "source": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+    "as_of": "2026-11-25",
+    "price_until": null,
+    "license_until": null,
+    "customer": "ООО «Вектор»",
+    "contract_ref": "DEMO-CONTRACT",
+    "previous_order": "DEMO",
+    "product": "КриптоПро CSP 5.0 бессрочная, рабочее место",
+    "quantity": 19,
+    "renewal_unit_kopecks": 370000,
+    "new_unit_kopecks": 370000,
+    "requested_days": 30,
+    "renewal_total_kopecks": 7030000,
+    "new_total_kopecks": 7030000,
+    "difference_kopecks": 0
+   },
+   "payment_due": null,
+   "decision_note": "",
+   "reason": "quote_review",
+   "quote": {
+    "offer": {
+     "id": "410137",
+     "family": "22268",
+     "name": "КриптоПро CSP (бессрочная лицензия СКЗИ КриптоПро CSP 5.0), на одном рабочем месте",
+     "vendor": "КриптоПро",
+     "category": "Программы для защиты информации",
+     "sku": null,
+     "url": "https://store.softline.ru/kripto-pro/-410137/",
+     "price_kopecks": 370000,
+     "available": true,
+     "min_users": null,
+     "max_users": null,
+     "term_months": null,
+     "registry": null,
+     "parameters": {
+      "Способ доставки": "Электронный",
+      "Срок действия": "бессрочная",
+      "Тип лицензии": "Полная версия",
+      "Тип организации": "Коммерческая",
+      "Пользователь": "Юрлицо"
+     },
+     "new_purchase": 1,
+     "source_date": "2026-11-25 14:12"
+    },
+    "quantity": 19,
+    "customer": "ООО «Демо»",
+    "inn": "0000000000",
+    "kpp": "000000000",
+    "amount_kopecks": 7030000,
+    "vat_kopecks": null,
+    "vat_status": "НДС уточняется менеджером",
+    "payment_terms": "Предоплата по оферте",
+    "source_date": "2026-11-25 14:12"
+   },
+   "created": "2026-11-26 12:53:03",
+   "updated": "2026-11-26 12:53:06",
+   "first_client_message": "Добрый день. Нужно коммерческое предложение на 19 бессрочных лицензий КриптоПро CSP"
+  }
+ ],
+ "journal": {
+  "8487a6bfae6743d88e546f8307798189": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:03"
+    },
+    {
+     "event": "quote_amount_calculated",
+     "detail": "7030000",
+     "created": "2026-11-26 12:53:06"
+    },
+    {
+     "event": "sent_to_manager",
+     "detail": "quote_review",
+     "created": "2026-11-26 12:53:06"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 90,
+     "role": "client",
+     "text": "Добрый день. Нужно коммерческое предложение на 19 бессрочных лицензий КриптоПро CSP",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:04"
+    },
+    {
+     "id": 91,
+     "role": "agent",
+     "text": "Лицензии КриптоПро нужны на рабочие места или на сервер?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Рабочие места",
+       "action": "placement",
+       "value": "workstation"
+      },
+      {
+       "label": "Сервер",
+       "action": "placement",
+       "value": "server"
+      }
+     ],
+     "created": "2026-11-26 12:53:04"
+    },
+    {
+     "id": 92,
+     "role": "client",
+     "text": "На рабочие места",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:05"
+    },
+    {
+     "id": 93,
+     "role": "agent",
+     "text": "КриптоПро CSP (бессрочная лицензия СКЗИ КриптоПро CSP 5.0), на одном рабочем месте — 3 700 ₽. https://store.softline.ru/kripto-pro/-410137/\nНа 19 шт. — 70 300 ₽. Для КП укажите название организации, ИНН и КПП. Для проверки стенда используйте тестовые реквизиты: ООО «Демо», ИНН 0000000000, КПП 000000000.",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Подготовить КП",
+       "action": "quote",
+       "value": ""
+      }
+     ],
+     "created": "2026-11-26 12:53:05"
+    },
+    {
+     "id": 94,
+     "role": "client",
+     "text": "ООО «Демо», ИНН 0000000000, КПП 000000000",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:06"
+    },
+    {
+     "id": 95,
+     "role": "agent",
+     "text": "Сумма по каталогу: 70 300 ₽. Передал запрос менеджеру. Его ответ появится в этом чате.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:06"
+    }
+   ]
+  },
+  "3f32729f623341b0a0308cd6a0afcef7": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:06"
+    },
+    {
+     "event": "requirements_understood",
+     "detail": "software_protection",
+     "created": "2026-11-26 12:53:07"
+    },
+    {
+     "event": "catalog_search",
+     "detail": "needs",
+     "created": "2026-11-26 12:53:10"
+    },
+    {
+     "event": "quote_amount_calculated",
+     "detail": "6183000",
+     "created": "2026-11-26 12:53:13"
+    },
+    {
+     "event": "sent_to_manager",
+     "detail": "quote_review",
+     "created": "2026-11-26 12:53:13"
+    },
+    {
+     "event": "manager_decision",
+     "detail": "approved",
+     "created": "2026-11-26 12:53:14"
+    },
+    {
+     "event": "catalog_quote_sent",
+     "detail": "",
+     "created": "2026-11-26 12:53:14"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 96,
+     "role": "client",
+     "text": "Нужно защитить почту и файлы на 50 сотрудников",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:07"
+    },
+    {
+     "id": 97,
+     "role": "agent",
+     "text": "Выбираем защиту для почты и файлов вместе или начинаем с почты?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "И почта, и файлы",
+       "action": "focus",
+       "value": "all"
+      },
+      {
+       "label": "Сначала почта",
+       "action": "focus",
+       "value": "mail"
+      }
+     ],
+     "created": "2026-11-26 12:53:07"
+    },
+    {
+     "id": 98,
+     "role": "client",
+     "text": "И почта, и файлы",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:08"
+    },
+    {
+     "id": 99,
+     "role": "agent",
+     "text": "На какой срок нужна лицензия?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "12 месяцев",
+       "action": "term",
+       "value": "12"
+      },
+      {
+       "label": "24 месяца",
+       "action": "term",
+       "value": "24"
+      }
+     ],
+     "created": "2026-11-26 12:53:08"
+    },
+    {
+     "id": 100,
+     "role": "client",
+     "text": "На 12 месяцев",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:09"
+    },
+    {
+     "id": 101,
+     "role": "agent",
+     "text": "Где будет работать решение?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Свои серверы",
+       "action": "deployment",
+       "value": "local"
+      },
+      {
+       "label": "Облако",
+       "action": "deployment",
+       "value": "cloud"
+      },
+      {
+       "label": "Оба варианта",
+       "action": "deployment",
+       "value": "flexible"
+      }
+     ],
+     "created": "2026-11-26 12:53:09"
+    },
+    {
+     "id": 102,
+     "role": "client",
+     "text": "На своих серверах",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:10"
+    },
+    {
+     "id": 103,
+     "role": "agent",
+     "text": "Варианты по данным каталога:\nПочта: Kaspersky Security для почтовых серверов базовая лицензия на 1 год по количеству почтовых адресов — 1 236,60 ₽. Карточка: https://store.softline.ru/kaspersky/kl4313ratfs-3853/\nРабочие станции и файлы: PRO32 Endpoint Security Standard версия на 1 год  и 50 узлов — 85 000 ₽. Карточка: https://store.softline.ru/pro32/pro32-pss-ns-1-50-399155/",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Выбрать: Почта",
+       "action": "select_offer",
+       "value": "3853"
+      },
+      {
+       "label": "Выбрать: Рабочие станции и файлы",
+       "action": "select_offer",
+       "value": "399155"
+      }
+     ],
+     "created": "2026-11-26 12:53:10"
+    },
+    {
+     "id": 104,
+     "role": "client",
+     "text": "Выбрана позиция каталога",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:11"
+    },
+    {
+     "id": 105,
+     "role": "agent",
+     "text": "Для КП укажите название организации, ИНН и КПП. Для проверки стенда используйте тестовые реквизиты: ООО «Демо», ИНН 0000000000, КПП 000000000.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:11"
+    },
+    {
+     "id": 106,
+     "role": "client",
+     "text": "ООО «Демо», ИНН 0000000000, КПП 000000000",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:13"
+    },
+    {
+     "id": 107,
+     "role": "agent",
+     "text": "Сумма по каталогу: 61 830 ₽. Передал запрос менеджеру. Его ответ появится в этом чате.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:13"
+    },
+    {
+     "id": 108,
+     "role": "manager",
+     "text": "Коммерческое предложение готово.",
+     "document_url": "expired",
+     "buttons": [],
+     "created": "2026-11-26 12:53:14"
+    }
+   ]
+  },
+  "4d094ba680ea4040806b66b0f2efa3a2": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:14"
+    },
+    {
+     "event": "demo_coupon_offered",
+     "detail": "5",
+     "created": "2026-11-26 12:53:15"
+    },
+    {
+     "event": "sent_to_manager",
+     "detail": "discount_over_limit",
+     "created": "2026-11-26 12:53:16"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 109,
+     "role": "client",
+     "text": "Здравствуйте, нужен MDaemon на 10 пользователей. Можно оплатить с отсрочкой?",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:15"
+    },
+    {
+     "id": 110,
+     "role": "agent",
+     "text": "Оплата по оферте — предоплата. Предлагаю демонстрационный купон на 5%. За большей скидкой подключу менеджера.",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Запросить больше",
+       "action": "more_discount",
+       "value": ""
+      },
+      {
+       "label": "Позвать оператора",
+       "action": "handoff",
+       "value": ""
+      }
+     ],
+     "created": "2026-11-26 12:53:15"
+    },
+    {
+     "id": 111,
+     "role": "client",
+     "text": "А больше скидку можно? Хотя бы 10%",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:16"
+    },
+    {
+     "id": 112,
+     "role": "agent",
+     "text": "Передал запрос менеджеру. Его ответ появится в этом чате.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:16"
+    }
+   ]
+  },
+  "cd0b99a3b4c94c4d86807ce4ebbe3c7d": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:16"
+    },
+    {
+     "event": "sent_to_manager",
+     "detail": "customer_request",
+     "created": "2026-11-26 12:53:17"
+    },
+    {
+     "event": "manager_decision",
+     "detail": "approved",
+     "created": "2026-11-26 12:53:18"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 113,
+     "role": "client",
+     "text": "Мы проводим госзакупку на антивирус, нужен менеджер",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:17"
+    },
+    {
+     "id": 114,
+     "role": "agent",
+     "text": "Передал запрос менеджеру. Его ответ появится в этом чате.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:17"
+    },
+    {
+     "id": 115,
+     "role": "manager",
+     "text": "Здравствуйте! Пришлите номер закупки, подготовлю КП по её условиям и отвечу здесь.",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:18"
+    }
+   ]
+  },
+  "28e5750cdeb9445f92db97258e870ea6": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:18"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 116,
+     "role": "client",
+     "text": "Где закрывающие документы по заказу?",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:19"
+    },
+    {
+     "id": 117,
+     "role": "agent",
+     "text": "Закрывающие документы по заказу проверьте в личном кабинете Store: https://store.softline.ru/ — войдите и откройте заказ. Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Позвать оператора",
+       "action": "handoff",
+       "value": ""
+      }
+     ],
+     "created": "2026-11-26 12:53:19"
+    }
+   ]
+  },
+  "bca1d48fdfb24d4690c4d0edc6e028e9": {
+   "events": [
+    {
+     "event": "opened",
+     "detail": "Сценарий КриптоПро, Softline XML feed, предложение 410137",
+     "created": "2026-11-26 12:53:19"
+    },
+    {
+     "event": "catalog_search",
+     "detail": "known",
+     "created": "2026-11-26 12:53:23"
+    },
+    {
+     "event": "registry_lookup",
+     "detail": "known",
+     "created": "2026-11-26 12:53:24"
+    }
+   ],
+   "usage": [],
+   "messages": [
+    {
+     "id": 118,
+     "role": "client",
+     "text": "MDaemon на 10 пользователей, сколько стоит?",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:20"
+    },
+    {
+     "id": 119,
+     "role": "agent",
+     "text": "На какой срок нужна лицензия?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "12 месяцев",
+       "action": "term",
+       "value": "12"
+      },
+      {
+       "label": "24 месяца",
+       "action": "term",
+       "value": "24"
+      }
+     ],
+     "created": "2026-11-26 12:53:20"
+    },
+    {
+     "id": 120,
+     "role": "client",
+     "text": "На 12 месяцев",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:21"
+    },
+    {
+     "id": 121,
+     "role": "agent",
+     "text": "Где будет работать решение?",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Свои серверы",
+       "action": "deployment",
+       "value": "local"
+      },
+      {
+       "label": "Облако",
+       "action": "deployment",
+       "value": "cloud"
+      },
+      {
+       "label": "Оба варианта",
+       "action": "deployment",
+       "value": "flexible"
+      }
+     ],
+     "created": "2026-11-26 12:53:21"
+    },
+    {
+     "id": 122,
+     "role": "client",
+     "text": "На своих серверах",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:23"
+    },
+    {
+     "id": 123,
+     "role": "agent",
+     "text": "Варианты по данным каталога:\nТочное название Standard в фиде не подтверждено. Ниже — MDaemon Messaging Server для проверки.\nMDaemon Standard: MDaemon Technologies, Ltd. MDaemon Messaging Server (лицензия с подпиской на обновления на 1 год), 10 пользователей — 61 698 ₽. Карточка: https://store.softline.ru/alt-n-technologies-ltd/-19575/",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Выбрать: MDaemon Standard",
+       "action": "select_offer",
+       "value": "19575"
+      }
+     ],
+     "created": "2026-11-26 12:53:23"
+    },
+    {
+     "id": 124,
+     "role": "client",
+     "text": "а есть российский аналог?",
+     "document_url": null,
+     "buttons": [],
+     "created": "2026-11-26 12:53:24"
+    },
+    {
+     "id": 125,
+     "role": "agent",
+     "text": "По фиду не нашёл подходящий вариант с подтверждённой записью в реестре. Могу позвать оператора.",
+     "document_url": null,
+     "buttons": [
+      {
+       "label": "Позвать оператора",
+       "action": "handoff",
+       "value": ""
+      }
+     ],
+     "created": "2026-11-26 12:53:24"
+    }
+   ]
+  }
+ }
+}

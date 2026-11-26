@@ -5,6 +5,11 @@
   'use strict';
   var CFG = window.SUPPORT_CONFIG || {};
   var DEMO = !!CFG.demo || /[?&]demo\b/.test(location.search);
+  // ?jury: просмотр для жюри. Тестовые разговоры стенда из jury-cases.json (читает api.js), действий менеджера нет:
+  // кнопки решений, ответы, правила, поправки и настройки не рисуются, клики по ним ничего не делают
+  var JURY = !DEMO && /[?&]jury\b/.test(location.search);
+  var MANAGER_ACTS = ['approve', 'refuse', 'refuse-send', 'refuse-back', 'answer', 'rule', 'rule-later', 'jfix', 'jok', 'k-add', 'k-rule',
+    'a-save', 'g-open', 'g-save', 'f-del', 'pause', 'edit', 'edit-save', 'edit-cancel', 'fn', 'model'];
   var API = String(CFG.apiBase || '/support/api').replace(/\/$/, '');
   var SAMPLE = window.CABINET_DEMO;
 
@@ -87,13 +92,13 @@
   /* ---------- состояние страницы ---------- */
   var ui = {
     tab: 'today', open: null, refusing: {}, history: {}, drafts: {}, ruleDone: {}, busy: {},
-    jFilter: 'all', jQuery: '', jSel: null, jAll: false, jPeriod: 'today', jChannel: 'all',
+    jFilter: 'all', jQuery: '', jSel: null, jAll: false, jPeriod: JURY ? 'all' : 'today', jChannel: 'all',
     agentView: 'work', edit: null, aQuery: '', aAll: false, aOpen: null, gapOpen: null
   };
 
   function route() {
     var h = (location.hash || '#today').slice(1).split('/');
-    ui.tab = ['today', 'journal', 'knowledge', 'agent'].indexOf(h[0]) >= 0 ? h[0] : 'today';
+    ui.tab = (JURY ? ['today', 'journal'] : ['today', 'journal', 'knowledge', 'agent']).indexOf(h[0]) >= 0 ? h[0] : 'today';
     if (ui.tab === 'journal' && h[1]) {
       if (h[1] === 'review' || h[1] === 'open' || h[1] === 'all') ui.jFilter = h[1]; else ui.jSel = decodeURIComponent(h[1]);
     }
@@ -146,7 +151,9 @@
     var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab];
     // вместо данных сервера показан пример: это предупреждение, оно красное, как остальные. Текст по причине
     var why = store.sample[key];
-    if (!DEMO && why) {
+    if (JURY) {
+      notes.push('<div class="notice"><span class="notice__text">' + t('Просмотр для жюри: тестовые разговоры со стенда. Решения менеджера здесь отключены') + '</span></div>');
+    } else if (!DEMO && why) {
       notes.push('<div class="notice"><span class="notice__text">' + t(why === 401 || why === 403
         ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
         : why === 503 ? 'На сервере агента не задан ключ менеджера. Пока показан пример, решения из него никуда не уходят'
@@ -206,7 +213,7 @@
       var h = '<article class="case' + busy + '" data-id="' + id + '"><div class="case__head"><div class="case__top">' + b +
         '<span class="case__meta">' + t(by + hm(c.decided_at)) + '</span><span class="case__top-right">' + historyLink(c) + '</span></div>' +
         titleRow(c) + '<p class="case__desc">' + t(c.result || '') + '</p></div>';
-      if (c.status === 'approved' && c.rule && !ui.ruleDone[c.id]) h += ruleBlock(c);
+      if (c.status === 'approved' && c.rule && !ui.ruleDone[c.id] && !JURY) h += ruleBlock(c);
       return h + historyBlock(c) + '</article>';
     }
     var open = ui.open === c.id;
@@ -229,8 +236,8 @@
     var approve = '<button class="btn ' + (c.recommend === 'refuse' ? 'btn--secondary' : 'btn--primary') + '" type="button" data-act="approve" data-id="' + esc(c.id) + '">' + t(c.approve_label || 'Согласовать') + '</button>';
     var refuse = '<button class="btn ' + (c.recommend === 'refuse' ? 'btn--primary' : 'btn--secondary') + '" type="button" data-act="refuse" data-id="' + esc(c.id) + '">Отказать</button>';
     return '<div class="case__block">' + (c.advice ? '<div class="case__advice-head">' + BOT + 'Совет агента</div><p>' + t(c.advice) + '</p>' : '') +
-      (c.effect ? '<div class="case__effect"><p class="case__effect-title">' + (c.recommend === 'refuse' ? 'Если согласовать, агент' : 'Что сделает агент') + '</p><p>' + t(c.effect) + '</p></div>' : '') +
-      '<div class="case__buttons">' + (c.recommend === 'refuse' ? refuse + approve : approve + refuse) + '</div></div>';
+      (c.effect ? '<div class="case__effect"><p class="case__effect-title">' + (JURY ? 'Что сделает агент, когда менеджер согласует' : c.recommend === 'refuse' ? 'Если согласовать, агент' : 'Что сделает агент') + '</p><p>' + t(c.effect) + '</p></div>' : '') +
+      (JURY ? '' : '<div class="case__buttons">' + (c.recommend === 'refuse' ? refuse + approve : approve + refuse) + '</div>') + '</div>';
   }
 
   function refuseBlock(c) {
@@ -251,6 +258,8 @@
     var d = draft(c);
     if (d.reply == null) d.reply = c.reply_draft || '';
     if (d.help == null) d.help = c.help_option !== false; // переключатель «в справку» только там, где сервер это умеет
+    if (JURY) return '<div class="case__block"><div class="case__advice-head">' + BOT + 'Сводка агента</div><p>' + t(c.advice) + '</p>' +
+      (c.effect ? '<div class="case__effect"><p class="case__effect-title">Что сделает агент, когда менеджер ответит</p><p>' + t(c.effect) + '</p></div>' : '') + '</div>';
     return '<div class="case__block"><div class="case__advice-head">' + BOT + 'Сводка агента</div><p>' + t(c.advice) + '</p>' +
       '<label class="case__effect"><span class="case__block-title">Ответ для клиента</span><textarea class="textarea" rows="2" data-draft="reply" data-id="' + esc(c.id) + '" placeholder="Что передать клиенту">' + esc(d.reply) + '</textarea></label>' +
       (c.help_option === false ? '' : '<label class="switch"><input type="checkbox" data-draft="help" data-id="' + esc(c.id) + '"' + (d.help ? ' checked' : '') + '>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>') +
@@ -357,7 +366,7 @@
       it._loading = true;
       call('GET', '/journal/' + encodeURIComponent(it.id)).then(function (d) { Object.assign(it, d); it._loading = false; if (ui.tab === 'journal') render(); }, function () { it._loading = false; it.events = []; });
     }
-    var reviewing = it.review;
+    var reviewing = it.review && !JURY;
     var h = '<section class="detail"><div class="detail__head"><h2 class="t-h2">' + t(it.detail_title || it.title) + '</h2><p class="t-muted">' + t(it.client || '') + '</p></div>';
     h += '<div class="detail__now">' + (it.badge ? badge(it.badge.tone || 'neutral', it.badge.text) : '') + (it.next ? '<p class="t-muted">' + t(it.next) + '</p>' : '') +
       (it.file ? '<a class="file-row"' + (it.file.url ? ' href="' + esc(it.file.url) + '" target="_blank" rel="noopener"' : '') + '>' + IC.file + '<span class="file-row__text"><span class="file-row__name">' + t(it.file.name) + '</span><span class="file-row__note">' + t(it.file.note || '') + '</span></span>' + (it.file.url ? IC.download : '') + '</a>' : '') +
@@ -390,6 +399,7 @@
 
   /* ---------- Знания ---------- */
   function actionRow(r, linkAct, linkText, extra) {
+    if (JURY && MANAGER_ACTS.indexOf(linkAct) >= 0) return '<div class="row"><span class="row__main"><span class="row__title">' + t(r.title) + '</span><span class="row__meta">' + t(r.meta) + '</span></span></div>';
     return '<div class="row"><span class="row__main"><span class="row__title">' + t(r.title) + '</span><span class="row__meta">' + t(r.meta) + '</span></span>' +
       '<button class="link row__action" type="button" data-act="' + linkAct + '" data-id="' + esc(r.id) + '">' + linkText + '</button></div>' + (extra || '');
   }
@@ -417,6 +427,7 @@
     return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + side + '</div></div>';
   }
   function articleEditor(a) {
+    if (JURY) return '<div class="row"><p>' + t(a.text || 'Текста статьи в примере нет') + '</p></div>';
     var d = ui.drafts['a-' + a.id] || (ui.drafts['a-' + a.id] = { text: a.text || '' });
     return '<div class="row" style="flex-direction:column;align-items:stretch;gap:12px"><textarea class="textarea" rows="4" data-draft="text" data-id="a-' + esc(a.id) + '" aria-label="Текст статьи «' + esc(a.title) + '»" placeholder="Текст статьи, по нему отвечает агент">' + esc(d.text) + '</textarea>' +
       '<div class="detail__actions"><button class="btn btn--primary" type="button" data-act="a-save" data-id="' + esc(a.id) + '">Сохранить статью</button></div></div>';
@@ -436,10 +447,10 @@
     var head = '<div class="agent__head"><div class="chips">' +
       '<a class="chip chip--plain' + (ui.agentView === 'work' ? ' is-active' : '') + '" href="#agent"' + (ui.agentView === 'work' ? ' aria-current="page"' : '') + '>Работа</a>' +
       '<a class="chip chip--plain' + (ui.agentView === 'settings' ? ' is-active' : '') + '" href="#agent/settings"' + (ui.agentView === 'settings' ? ' aria-current="page"' : '') + '>Настройки</a></div>' +
-      '<div class="agent__pause">' + (paused
+      (JURY ? '' : '<div class="agent__pause">') + (JURY ? '' : paused
         ? '<span>' + t('Вы поставили паузу ' + (store.status.since ? 'сегодня в ' + hm(store.status.since) : '') + '. Все обращения идут менеджерам, как до агента').replace(' .', '.') + '</span><button class="btn btn--primary" type="button" data-act="pause" data-on="0">Включить агента</button>'
         : '<span>' + t('На паузе все обращения идут менеджерам, как до агента') + '</span><button class="btn btn--secondary btn--icon-left" type="button" data-act="pause" data-on="1">' + IC.pause + 'Поставить на паузу</button>') +
-      '</div></div>';
+      (JURY ? '' : '</div>') + '</div>';
     return '<div style="display:flex;flex-direction:column;gap:28px">' + head + (ui.agentView === 'settings' ? viewSettings() : viewWork()) + '</div>';
   }
   function viewWork() {
@@ -512,7 +523,7 @@
       return '<div class="row"><span class="row__main"><span class="row__meta">' + t(meta) + '</span><span class="setting__edit"><input class="input" data-edit="' + key + '" value="' + esc(value) + '" aria-label="' + esc(title) + '"' + (unit ? ' inputmode="numeric"' : '') + '>' + (unit ? '<span>' + unit + '</span>' : '') +
         '<button class="btn btn--primary" type="button" data-act="edit-save" data-key="' + key + '">Сохранить</button><button class="link" type="button" data-act="edit-cancel">Отмена</button></span></span></div>';
     }
-    return '<div class="row"><span class="row__main"><span class="row__title">' + t(title) + '</span><span class="row__meta">' + t(meta) + '</span></span><button class="link row__action" type="button" data-act="edit" data-key="' + key + '">Изменить</button></div>';
+    return '<div class="row"><span class="row__main"><span class="row__title">' + t(title) + '</span><span class="row__meta">' + t(meta) + '</span></span>' + (JURY ? '' : '<button class="link row__action" type="button" data-act="edit" data-key="' + key + '">Изменить</button>') + '</div>';
   }
   function viewSettings() {
     var s = store.settings || {};
@@ -521,6 +532,7 @@
       settingRow('warn_rub', 'Предупреждение при ' + money(s.warn_rub), 'Письмо получат менеджеры и бухгалтерия', s.warn_rub, '₽') +
       (s.server_rub ? '<p class="panel__note">' + t('Сервер ' + money(s.server_rub) + ' в месяц оплачивается отдельно и в лимит не входит') + '</p>' : '') + '</section>';
     main += '<section class="panel">' + panelHead('Что ещё делает агент') + '<div class="panel__list panel__list--tight">' + (s.functions || []).map(function (f) {
+      if (JURY) return '<div class="row"><span class="row__main"><span class="row__title">' + t(f.title) + '</span><span class="row__meta">' + t(f.meta) + '</span></span><span class="row__status">' + (f.on ? 'включено' : 'выключено') + '</span></div>';
       return '<label class="row" style="cursor:pointer"><span class="row__main"><span class="row__title">' + t(f.title) + '</span><span class="row__meta">' + t(f.meta) + '</span></span><span class="switch"><input type="checkbox" data-act="fn" data-id="' + esc(f.id) + '"' + (f.on ? ' checked' : '') + ' aria-label="' + esc(f.title) + '"></span></label>';
     }).join('') + '</div><p class="panel__note">' + t('Выключенная функция не тратит лимит. Ответы в чате на сайте останавливает только пауза') + '</p></section>';
     var side = '<section class="panel">' + panelHead('Срок ответа и часы менеджеров') +
@@ -528,7 +540,9 @@
       settingRow('hours', s.hours || '', 'В эти часы агент сразу передаёт сложный случай менеджеру', s.hours, '') +
       '<p class="panel__note">' + t('Вечером и в выходные агент пишет клиенту, что менеджер ответит до 10:00 следующего рабочего дня') + '</p></section>';
     side += '<section class="panel">' + panelHead('Модель') + '<div class="panel__list panel__list--tight" role="radiogroup" aria-label="Модель агента">' + (s.models || []).map(function (m) {
-      return '<div class="model"><label class="radio"><input type="radio" name="model" value="' + esc(m.id) + '" data-act="model"' + (s.model === m.id ? ' checked' : '') + '>' + esc(m.name) + '</label><span class="model__price"><span class="model__cost">' + t(m.cost) + '</span><span class="t-muted">' + t(m.month) + '</span></span></div>';
+      var pick = JURY ? '<span class="model__name">' + esc(m.name) + (s.model === m.id ? ' · сейчас' : '') + '</span>'
+        : '<label class="radio"><input type="radio" name="model" value="' + esc(m.id) + '" data-act="model"' + (s.model === m.id ? ' checked' : '') + '>' + esc(m.name) + '</label>';
+      return '<div class="model">' + pick + '<span class="model__price"><span class="model__cost">' + t(m.cost) + '</span><span class="t-muted">' + t(m.month) + '</span></span></div>';
     }).join('') + '</div>' + (s.model_note ? '<p class="panel__note">' + t(s.model_note) + '</p>' : '') + '</section>';
     return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + side + '</div></div>';
   }
@@ -598,6 +612,7 @@
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT' || b.tagName === 'SELECT') return;
     var a = b.getAttribute('data-act'), id = b.getAttribute('data-id'), c = id ? findCase(id) : null;
+    if (JURY && MANAGER_ACTS.indexOf(a) >= 0) return;
 
     if (a === 'open') { ui.open = id; render(); return; }
     if (a === 'collapse') { ui.open = '__none'; render(); return; }
@@ -730,6 +745,12 @@
     }, function () {});
   }
 
+  if (JURY) {
+    // «Знания» и «Агент» сервер не отдаёт, там пример с макета: жюри видит только разговоры стенда
+    [].forEach.call(document.querySelectorAll('.tab[data-tab="knowledge"], .tab[data-tab="agent"]'), function (a) { a.hidden = true; });
+    var who = $('.header__user');
+    if (who) { $('.avatar', who).textContent = 'Ж'; $('.header__name', who).textContent = 'Жюри'; $('.header__role', who).textContent = 'Просмотр без действий менеджера'; }
+  }
   window.addEventListener('hashchange', route);
   if (DEMO) store.status = copy(SAMPLE.status);
   else call('GET', '/agent/status').then(function (s) { store.status = s; renderTop(); }, function () { store.status = { state: 'on' }; store.sample.status = true; });

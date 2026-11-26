@@ -108,8 +108,26 @@
   }
 
   /* ---------- Кабинет ---------- */
+  // Просмотр для жюри (/support/cabinet/?jury): тестовые разговоры стенда из jury-cases.json, его пишет
+  // scripts/jury-cases.mjs. Ключ менеджера не нужен, в сервер ничего не уходит: чтение из файла, запись отклоняется
+  var JURY = /[?&]jury\b/.test(location.search), juryData = null;
+  function jury(method, path) {
+    if (method !== 'GET') return Promise.reject(fail(403));
+    juryData = juryData || fetch('jury-cases.json', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw fail(r.status); return r.json(); });
+    return juryData.then(function (d) {
+      var all = d.cases || [], m;
+      if (/^\/manager\/cases\?state=all/.test(path)) return { cases: all };
+      if (path === '/manager/cases') return { cases: all.filter(function (v) { return v.state === 'pending'; }) };
+      if ((m = /^\/manager\/cases\/([^/]+)\/(journal|messages)$/.exec(path))) {
+        var j = (d.journal || {})[decodeURIComponent(m[1])]; if (!j) throw fail(404);
+        return m[2] === 'journal' ? j : { messages: j.messages || [] };
+      }
+      throw fail(404);
+    });
+  }
   function managerHeaders() { return { 'X-Manager-Key': read(MANAGER_KEY) || '' }; }
   function manager(method, path, body) {
+    if (JURY) return jury(method, path);
     return raw(method, path, body, managerHeaders()).catch(function (e) {
       if (e.status === 401 || e.status === 503) askKey(e.status);
       throw e;
