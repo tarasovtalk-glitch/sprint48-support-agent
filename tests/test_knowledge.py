@@ -76,3 +76,106 @@ def test_personal_data_masked():
 
 def test_handoff_words_are_not_question_keys():
     assert keys('Позовите менеджера, пожалуйста') == set()
+
+
+# --- проверка Codex 27.11: регрессии на найденные дефекты ---
+import sqlite3  # noqa: E402
+
+import pytest  # noqa: E402
+
+from support_app.knowledge import find_answer, has_private, question_for, save_answer  # noqa: E402
+from support_app.store import SCHEMA  # noqa: E402
+
+
+@pytest.fixture
+def mem():
+    db = sqlite3.connect(':memory:', isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.executescript(SCHEMA)
+    db.execute('PRAGMA foreign_keys = OFF')  # источник-обращение здесь не нужен
+    return db
+
+
+def test_lookup_and_save_keep_transaction(mem):
+    mem.execute('BEGIN IMMEDIATE')
+    save_answer(mem, 'c1', QUESTION, ANSWER)
+    find_answer(mem, QUESTION)
+    assert mem.in_transaction
+    mem.rollback()
+    assert mem.execute('SELECT count(*) FROM knowledge').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('other', [
+    'Можно ли оплатить лицензии в рассрочку на сто месяцев?',
+    'Можно ли оплатить лицензии в рассрочку на 6 месяцев?',
+    'Нельзя оплатить лицензии в рассрочку на три месяца?',
+])
+def test_numbers_and_negation_must_match(mem, other):
+    save_answer(mem, 'c1', QUESTION, ANSWER)
+    assert find_answer(mem, other) is None
+
+
+def test_private_answer_not_published(mem):
+    for private in ('Иванов Иван Иванович, ваш заказ 12345678 отправлен на ул. Ленина 5',
+                    'Позвоните Марине по номеру 912 345-67-89', 'Счёт выставлен на ООО «Ромашка», ИНН 7701234560'):
+        assert has_private(private), private
+        with pytest.raises(ValueError):
+            save_answer(mem, 'c1', 'Когда отправите заказ с лицензиями Касперского?', private)
+    assert not has_private(ANSWER)
+
+
+def test_same_question_updates_not_duplicates(mem):
+    for i in range(5):
+        save_answer(mem, 'c1', QUESTION, ANSWER + f' Версия {i}.')
+    assert mem.execute('SELECT count(*) FROM knowledge').fetchone()[0] == 1
+    assert 'Версия 4' in find_answer(mem, QUESTION)['answer']
+
+
+def test_broken_memory_does_not_break_chat(client):
+    answer_and_remember(client)
+    chat = Chat(client)
+    import support_app.chat as chat_module
+    original = chat_module.find_answer
+    chat_module.find_answer = lambda db, text: (_ for _ in ()).throw(sqlite3.OperationalError('no such column'))
+    try:
+        r = chat.say(QUESTION)
+    finally:
+        chat_module.find_answer = original
+    assert chat.last.status_code == 200 and r['reply'].strip()
+
+
+def test_handoff_with_known_question_goes_to_operator(client):
+    answer_and_remember(client)
+    chat = Chat(client)
+    chat.say('Позовите оператора: ' + QUESTION)
+    assert chat.state == 'pending'
+
+
+def test_quantity_change_not_intercepted(client):
+    answer_and_remember(client)
+    chat = Chat(client)
+    chat.say('Нужна КриптоПро CSP 5.0 на 19 рабочих мест')
+    r = chat.say('Сделайте на 5 рабочих мест, и можно ли оплатить лицензии в рассрочку?')
+    assert 'Рассрочки нет' not in r['reply'], r['reply']
+
+
+def test_question_is_customer_question_not_clarification():
+    messages = [{'role': 'client', 'text': 'Есть ли у вас доставка коробочных версий в Калининград?'},
+                {'role': 'bot', 'text': 'Какой продукт?'},
+                {'role': 'client', 'text': 'Коробочная версия Антивируса Касперского'},
+                {'role': 'client', 'text': 'Позовите менеджера'}]
+    assert 'Калининград' in question_for(messages)
+
+
+def test_decision_with_private_answer_still_sent_but_not_saved(client):
+    chat = Chat(client)
+    chat.say('Когда отправите документы по заказу лицензий?')
+    chat.say('Позовите менеджера')
+    cid, version = case_of(client, chat)
+    r = client.post(f'/support/api/manager/cases/{cid}/decision', headers=H,
+                    json={'choice': 'approve', 'version': version, 'request_id': str(uuid.uuid4()),
+                          'reply': 'Иванов Иван Иванович, документы отправили на ivan@romashka.ru', 'remember': True})
+    assert r.status_code == 200, r.text
+    assert r.json()['knowledge']['saved'] is False
+    answers = client.get('/support/api/manager/knowledge', headers=H).json()['answers']
+    assert not any('ivan@' in a['answer'] or 'Иванов' in a['answer'] for a in answers)
