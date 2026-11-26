@@ -20,7 +20,11 @@
     if (body) h['Content-Type'] = 'application/json';
     return fetch(API + path, { method: method, credentials: 'same-origin', headers: h, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) {
-        if (!r.ok) throw fail(r.status);
+        if (!r.ok) {
+          var error = fail(r.status);
+          if (r.status === 429) error.retryAfter = Number(r.headers.get('Retry-After'));
+          throw error;
+        }
         return r.status === 204 ? {} : r.json();
       });
   }
