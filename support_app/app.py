@@ -255,12 +255,22 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
               offset: int = Query(default=0, ge=0)):
         with store.connect() as db:
-            rows = db.execute("SELECT * FROM cases WHERE (?='all' OR state='pending') ORDER BY rowid DESC LIMIT ? OFFSET ?",
-                              (state, limit, offset)).fetchall()
+            rows = db.execute('''
+                SELECT c.*,
+                    COALESCE((SELECT j.created FROM journal j WHERE j.case_id=c.id AND j.event='opened' ORDER BY j.id LIMIT 1),
+                             (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id LIMIT 1)) AS created,
+                    (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message
+                FROM cases c
+                WHERE (?='all' OR c.state='pending') ORDER BY c.rowid DESC LIMIT ? OFFSET ?
+            ''', (state, limit, offset)).fetchall()
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
-                cases.append({**case_view(row), 'reason': context.get('queue_reason'), 'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None})
+                cases.append({**case_view(row), 'reason': context.get('queue_reason'),
+                              'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None,
+                              'created': row['created'], 'updated': row['last_message'] or row['created'],
+                              'first_client_message': row['first_client_message']})
             return {'cases': cases}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/messages', dependencies=[Depends(manager)])
