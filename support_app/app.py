@@ -17,6 +17,7 @@ from .documents import render_pdf, rubles
 from .mail import run_mail_queue
 from .model import classify
 from .scenario import load_scenario
+from .selection import catalog_router
 from .store import Store, append_event, case_view, queue_mail
 
 
@@ -104,6 +105,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 worker.join(timeout=6)
 
     app = FastAPI(title='SMF Support', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    catalog_path = Path(os.environ.get('SUPPORT_CATALOG_DATABASE', database.with_name('catalog.sqlite3')))
+    app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
 
     def manager(x_manager_key: str = Header(default='')):
         require_key(manager_key, x_manager_key)
