@@ -19,6 +19,24 @@ BUTTON_TEXT = {
     ('deployment', 'flexible'): 'Рассмотрю оба варианта', ('focus', 'mail'): 'Сначала защита почты',
     ('focus', 'all'): 'И почта, и файлы',
 }
+PRODUCT_WORDS = re.compile(r'[^\W_]+', re.UNICODE)
+PURCHASE_WORDS = re.compile(r'цен|стоим|приобрест|\bкп\b|хочу купить|сколько стоит|подбира')
+KNOWN_WORDS = {'на', 'по', 'для', 'и', 'за', 'или', 'как', 'подскажите', 'скажите', 'пожалуйста', 'хочу', 'нужна', 'нужно',
+               'нужен', 'купить', 'цены', 'цену', 'цена', 'стоимость', 'сколько', 'стоит', 'лицензия', 'лицензии', 'кп',
+               'инн', 'ооо', 'продукт', 'добрый', 'день', 'привет', 'здравствуйте', 'какие', 'есть', 'можно', 'да', 'нет'}
+INTENT_CUES = {
+    'помоги', 'помогите', 'выбрать', 'подбор', 'подберите', 'нужна', 'нужен', 'нужно', 'цена', 'цену', 'стоимость',
+    'сколько', 'стоит', 'счет', 'оплата', 'заказ', 'купить', 'покупка', 'поддержка', 'документы', 'программа', 'программу',
+    'лицензия', 'лицензию', 'лицензий', 'оформить', 'сравнить', 'сравнение', 'варианты', 'решение', 'кп',
+}
+
+
+def intent_cues(text: str) -> str:
+    query = normalize(text)
+    if re.search(r'криптопро|mdaemon|защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
+        return ''
+    tokens = [w for w in PRODUCT_WORDS.findall(query) if w in INTENT_CUES]
+    return ' '.join(tokens[:20]) if len(tokens) >= 2 else ''
 
 
 def buttons(items):
@@ -42,6 +60,38 @@ def lookup(catalog: Path, offer_id: str):
             return None
         date = db.execute("SELECT value FROM metadata WHERE name='source_date'").fetchone()
         return {**view(row), 'source_date': date['value'] if date else ''}
+
+
+def resolve_product(catalog: Path, text: str, quantity: int | None):
+    if not catalog.is_file():
+        return []
+    for url in re.findall(r'https?://store\.softline\.ru/[^\s<>\]\)]+', text, re.I):
+        offer_id = re.search(r'-(\d+)(?:/|$|\?)', url)
+        if offer_id:
+            found = lookup(catalog, offer_id.group(1))
+            if found:
+                return [found]
+    sku_tokens = [t for t in re.findall(r'\b[A-Z][A-Z0-9_.-]{4,29}\b', text) if any(c.isdigit() for c in t)][:3]
+    phrases = re.findall(r'[«"]([^»"\r\n]{4,65})[»"]', text)[:3]
+    if not phrases and PURCHASE_WORDS.search(normalize(text)):
+        normal = normalize(text).split('[', 1)[0].strip()
+        phrases = [normal[:85]]
+    if not (sku_tokens or phrases):
+        return []
+    with closing(read_only(catalog)) as db:
+        for sku in sku_tokens:
+            row = db.execute('SELECT * FROM products WHERE sku=? ORDER BY available DESC LIMIT 1', (sku,)).fetchone()
+            if row:
+                return [view(row)]
+        for phrase in phrases:
+            words = [w for w in PRODUCT_WORDS.findall(normalize(phrase)) if len(w) >= 3 and w not in KNOWN_WORDS]
+            if len(words) < 2 or len(words) > 6:
+                continue
+            rows = find_matches(db, words, quantity, None, active_only=True)
+            exact = [option for option in rows if all(w in normalize(option['name']) for w in words)]
+            if exact:
+                return exact[:3]
+    return []
 
 
 def enter_queue(db, row, state, reason: str) -> str:
@@ -117,7 +167,7 @@ def collect_selection(state, catalog: Path, registry=False):
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 
-def run_turn(db, row, state, catalog: Path, *, text='', action=None, value=''):
+def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown'):
     query = normalize(text)
     count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|рабочих\s+мест|узл|ящик|мест)', query)
     if count:
@@ -134,6 +184,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value=''):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
         return 'Закрывающие документы по заказу проверьте в личном кабинете Store: https://store.softline.ru/ — войдите и откройте заказ. Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
+    if re.search(r'статус\s+заказа|(?:где|получить|пришел|найти).{0,25}ключ\w*\s*(?:лицензи|заказа|$)', query):
+        return 'Статус и данные электронной доставки проверяются в вашем заказе в личном кабинете Store: https://store.softline.ru/. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
     match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*%', query)
     discount = Decimal(match.group(1).replace(',', '.')) if match else None
     if action == 'more_discount' or re.search(r'(?:больш|выше).{0,35}(?:скид|купон|%)|(?:скид|купон).{0,30}(?:больш|выше)', query) or (discount is not None and discount > 5):
@@ -185,4 +237,24 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value=''):
         if action == 'focus' and value in {'mail', 'all'}:
             state['focus'] = value
         return collect_selection(state, catalog, bool(re.search(r'российск|отечествен|реестр', query)))
+    candidates = resolve_product(catalog, text, state.get('quantity'))
+    if candidates:
+        if len(candidates) == 1 and (not candidates[0]['available'] or candidates[0]['price_kopecks'] is None):
+            return enter_queue(db, row, state, 'price_confirmation'), []
+        state['flow'] = 'catalog_reference'
+        state['offered_ids'] = [item['id'] for item in candidates]
+        lines = ['Нашёл в каталоге:']
+        for item in candidates:
+            price = rubles(item['price_kopecks']) if item['price_kopecks'] is not None else 'по запросу'
+            lines.append(f'{item["name"]} — {price} {item["url"] or ""}')
+        return '\n'.join(lines), [('Выбрать: ' + item['name'][:45], 'select_offer', item['id']) for item in candidates]
+    if intent_hint == 'handoff':
+        return enter_queue(db, row, state, 'model_routing'), []
+    if intent_hint == 'help':
+        return 'Что нужно проверить по заказу: статус, документы или лицензионный ключ?', JOIN_MANAGER
+    if intent_hint == 'selection':
+        return 'Какую задачу должно решить ПО? Например, защитить почту и файлы. Укажите примерное число сотрудников.', JOIN_MANAGER
+    if PURCHASE_WORDS.search(query) or action in ('price', 'invoice') or intent_hint in {'price', 'quote', 'invoice'}:
+        state['flow'] = 'awaiting_product'
+        return 'Пришлите название, артикул или ссылку на карточку товара. Проверю цены и варианты по каталогу.', JOIN_MANAGER
     return 'Помогу подобрать ПО или позову оператора. Напишите название продукта или расскажите, какую задачу нужно решить.', JOIN_MANAGER

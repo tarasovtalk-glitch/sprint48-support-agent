@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
-from .chat import buttons, customer_text, run_turn
+from .chat import buttons, customer_text, intent_cues, run_turn
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .model import classify
@@ -160,11 +160,16 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         if chat_only:
             if payload.channel != 'chat':
                 raise HTTPException(422, 'This stand accepts chat messages only.')
+            with store.connect() as db:
+                existing_context = chat_state(db, case_id)
+            cues = intent_cues(payload.text) if payload.text and not existing_context else ''
+            hint = classify(store, case_id, cues, api_key=model_key, model_uri=model_uri,
+                            daily=daily_limit, total=total_limit) if cues else 'unknown'
             with store.connect(write=True) as db:
                 state = chat_state(db, case_id)
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
                 reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
-                                          text=payload.text or '', action=payload.action, value=payload.value)
+                                          text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint)
                 save_chat_state(db, case_id, state)
                 reply_buttons = buttons(choices)
                 agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
