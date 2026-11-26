@@ -12,3 +12,7 @@ token_max.conf
 .venv/
 __pycache__/
 *.sqlite3*
+
+# frontend
+frontend/node_modules/
+frontend/dist/
