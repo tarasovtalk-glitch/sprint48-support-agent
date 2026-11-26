@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .dialog import CORRECTION, catalog_turn, digits, quantity, units_for
 from .catalog import find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
 from .selection import Selection, selection_result
@@ -11,10 +12,11 @@ from .store import append_event
 
 
 CRYPTO_WORKSTATION = '410137'
-CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
+CRYPTO_NAME = re.compile(r'крипто\s*-?\s*про|crypto\s*pro|kripto\s*pro')
+CRYPTO_OTHER = re.compile(r'\btsp\b|\bocsp\b|\bdss\b|\bjcp\b|\bуц\b|ipsec|криптоарм|crypto\s*arm')
 NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
-EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|запросить цену|тендер|госзакупк')
+EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|тендер|госзакупк')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
@@ -50,6 +52,7 @@ QUOTE_CUSTOMER_PROMPT = (
 )
 QUOTE_REQUISITES = re.compile(r'\b(ИНН|КПП)\b[\s:=№]*([0-9][A-Za-z0-9]*)', re.I)
 INN_FORMAT = re.compile(r'(?:[0-9]{10}|[0-9]{12})')
+INN_CONFIRM = re.compile(r'^\s*(?:да|ага|верно|все\s+верно|правильно|подтверждаю|инн\s+верн\w*|верный|формируйте)(?![^\W_])')
 KPP_FORMAT = re.compile(r'[0-9]{4}[A-Za-z0-9]{2}[0-9]{3}')
 BUTTON_TEXT = {
     ('placement', 'workstation'): 'На рабочие места', ('placement', 'server'): 'На сервер',
@@ -190,10 +193,34 @@ def enter_queue(db, row, state, reason: str) -> str:
     return 'Передал запрос менеджеру. Его ответ появится в этом чате.'
 
 
+def inn_valid(inn: str) -> bool:
+    """Контрольные цифры ИНН (10 цифр — организация, 12 — ИП и физлицо)."""
+    d = [int(c) for c in inn]
+    check = lambda weights, n: sum(w * x for w, x in zip(weights, d)) % 11 % 10 == d[n]  # noqa: E731
+    if len(d) == 10:
+        return check([2, 4, 10, 3, 5, 9, 4, 6, 8], 9)
+    return len(d) == 12 and check([7, 2, 4, 10, 3, 5, 9, 4, 6, 8], 10) and check([3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8], 11)
+
+
+def accept_inn(state, value: str):
+    """ИНН с ошибкой в контрольной цифре не принимаем молча: переспрашиваем один раз; повтор того же — принимаем, менеджер проверит."""
+    repeated = state.get('inn_rejected') == value and state.get('inn_rejected_turn') != state.get('turn_no')
+    if inn_valid(value) or repeated:
+        state['inn'] = value
+        if not inn_valid(value):
+            state['inn_unverified'] = True
+        state.pop('inn_rejected', None)
+    else:
+        state.pop('inn', None)
+        if state.get('inn_rejected') != value:
+            state['inn_rejected_turn'] = state.get('turn_no')
+        state['inn_rejected'] = value
+
+
 def remember_quote_customer(state, text: str):
     for field, value in QUOTE_REQUISITES.findall(text):
         if field.upper() == 'ИНН' and INN_FORMAT.fullmatch(value):
-            state['inn'] = value
+            accept_inn(state, value)
         if field.upper() == 'КПП' and KPP_FORMAT.fullmatch(value):
             state['kpp'] = value.upper()
     name = QUOTE_REQUISITES.sub(' ', text).strip(' \t\r\n,:;.-')
@@ -203,11 +230,16 @@ def remember_quote_customer(state, text: str):
             return
         bare_inn = re.search(r'(?<!\w)([0-9]{10}|[0-9]{12})(?!\w)', name)
         if bare_inn:
-            state['inn'] = bare_inn[1]
+            accept_inn(state, bare_inn[1])
             name = (name[:bare_inn.start()] + name[bare_inn.end():]).strip(' \t\r\n,:;.-')
     name = re.sub(r'^(?:название(?: организации)?|организация|компания)\s*:\s*', '', name, flags=re.I)
     if any(char.isalpha() for char in name) and not re.search(r'\b(?:инн|кпп)\b', name, re.I):
         state['customer'] = ' '.join(name.split())[:100]
+    else:
+        # реквизиты внутри длинной реплики: «… ИП Петров, ИНН …» — берём форму и название
+        org = re.search(r'(?<![^\W_])(?:ООО|АО|ПАО|ЗАО|ОАО|ИП|ГБУ|МБУ|ФГБУ|ГКУ|МКУ|НКО|АНО)\s+[«"]?[^,.;\n]{2,60}', text)
+        if org and not re.search(r'\b(?:инн|кпп)\b', org.group(0), re.I):
+            state['customer'] = ' '.join(org.group(0).split())[:100]
 
 
 def queue_quote(db, row, state, catalog: Path):
@@ -215,7 +247,13 @@ def queue_quote(db, row, state, catalog: Path):
         return 'Сначала выберите позицию каталога, для которой нужно КП.', []
     if not state.get('quantity'):
         return 'На сколько лицензий подготовить КП?', []
-    missing = [label for key, label in (('customer', 'название организации'), ('inn', 'ИНН'), ('kpp', 'КПП')) if not state.get(key)]
+    if not state.get('inn') and state.get('inn_rejected'):
+        state['awaiting_customer'] = True
+        return (f'ИНН {state["inn_rejected"]} не проходит проверку контрольной цифры. Проверьте, пожалуйста, нет ли опечатки? '
+                'Если ИНН верный, пришлите его ещё раз — передам менеджеру на проверку.'), []
+    sole_trader = len(state.get('inn') or '') == 12  # ИП: ИНН из 12 цифр, КПП у ИП нет
+    missing = [label for key, label in (('customer', 'название организации'), ('inn', 'ИНН'), ('kpp', 'КПП'))
+               if not state.get(key) and not (key == 'kpp' and sole_trader)]
     if missing:
         state['awaiting_customer'] = True
         return (QUOTE_CUSTOMER_PROMPT if len(missing) == 3 else f'Для КП укажите ещё {", ".join(missing)}.'), []
@@ -226,10 +264,12 @@ def queue_quote(db, row, state, catalog: Path):
         return enter_queue(db, row, state, 'price_confirmation'), []
     requested_users = state['quantity']
     quantity = purchasable_units(product, requested_users)
+    if quantity is None and state.get('g_family'):
+        quantity = units_for(product, requested_users)
     if quantity is None:
         return 'Количество и цену для выбранной лицензии нужно сверить. ' + enter_queue(db, row, state, 'price_confirmation'), []
     state['quote'] = {
-        'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'], 'kpp': state['kpp'],
+        'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'], 'kpp': state.get('kpp') or '',
         'requested_users': requested_users,
         'amount_kopecks': product['price_kopecks'] * quantity, 'vat_kopecks': None,
         'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
@@ -238,7 +278,9 @@ def queue_quote(db, row, state, catalog: Path):
     state['awaiting_customer'] = False
     append_event(db, row['id'], 'quote_amount_calculated', str(state['quote']['amount_kopecks']))
     message = enter_queue(db, row, state, 'quote_review')
-    return f'Сумма по каталогу: {chat_price(state["quote"]["amount_kopecks"])}. {message}', []
+    units = f'{chat_price(product["price_kopecks"])} × {quantity} = ' if quantity > 1 else ''
+    return (f'Черновик КП готов: {product["name"]}, {units}{chat_price(state["quote"]["amount_kopecks"])} по каталогу. '
+            f'Сумма по каталогу проверена. {message}'), []
 
 
 def registry_selection(db, req):
@@ -261,14 +303,23 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     if not catalog.is_file():
         return 'Каталог ещё недоступен. Могу позвать оператора.', JOIN_MANAGER
     if state['flow'] == 'needs':
+        if not state.get('focus') and state.get('focus_asked'):
+            state['focus'] = 'all'
         if not state.get('focus'):
+            state['focus_asked'] = True
             return 'Выбираем защиту для почты и файлов вместе или начинаем с почты?', [('И почта, и файлы', 'focus', 'all'), ('Сначала почта', 'focus', 'mail')]
     if state['flow'] == 'mdaemon' and not state.get('quantity'):
         edition = 'Редакцию MDaemon Standard в фиде не нашёл. Могу проверить MDaemon Messaging Server. ' if state.get('standard_requested') else ''
         return edition + 'На сколько пользователей нужна лицензия?', []
+    if not state.get('term') and state.get('term_asked'):
+        state['term'] = 12
     if not state.get('term'):
+        state['term_asked'] = True
         return 'На какой срок нужна лицензия?', [('12 месяцев', 'term', '12'), ('24 месяца', 'term', '24')]
+    if not state.get('deployment') and state.get('deployment_asked'):
+        state['deployment'] = 'flexible'
     if not state.get('deployment') and state['flow'] != 'mdaemon':
+        state['deployment_asked'] = True
         return 'Где будет работать решение?', [('Свои серверы', 'deployment', 'local'), ('Облако', 'deployment', 'cloud'), ('Оба варианта', 'deployment', 'flexible')]
     if not state.get('quantity'):
         return 'Сколько пользователей или устройств нужно покрыть?', []
@@ -304,9 +355,29 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
 
 def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url='', tool=None):
     query = normalize(text)
-    count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', query)
+    state['turn_no'] = state.get('turn_no', 0) + 1
+    if text is not None and not text.strip() and not action:
+        return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
+    count_query = digits(query)
+    correction = CORRECTION.search(count_query)
+    count = correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
+    previous_quantity = state.get('quantity')
     if count:
         state['quantity'] = int(count.group(1))
+    elif text and quantity(text):
+        state['quantity'] = quantity(text)
+        count = True
+    if (count and previous_quantity and state['quantity'] != previous_quantity and state.get('flow') == 'cryptopro'
+            and state.get('offer_id') and row['state'] != 'pending'):
+        product = lookup(catalog, state['offer_id'])
+        if product and product['available'] and product['price_kopecks']:
+            remember_quote_customer(state, text)
+            if state.get('customer') and state.get('inn') and (state.get('kpp') or len(state['inn']) == 12):
+                return queue_quote(db, row, state, catalog)
+            state['awaiting_customer'] = True
+            amount = product['price_kopecks'] * state['quantity']
+            return (f'Пересчитал: {product["name"]} — {chat_price(product["price_kopecks"])} × {state["quantity"]} = {chat_price(amount)}. '
+                    + QUOTE_CUSTOMER_PROMPT), [('Подготовить КП', 'quote', '')]
     if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query):
         if tool == 'contact_manager':
             append_event(db, row['id'], 'model_tool_executed', tool)
@@ -320,9 +391,20 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
-    if state.get('awaiting_customer') and text:
+    if (state.get('inn_rejected') and state.get('inn_rejected_turn') != state['turn_no'] and INN_CONFIRM.search(query)
+            and not INN_FORMAT.search(text)):
+        # «Да, ИНН верный, формируйте» после вопроса о контрольной цифре — принимаем тот же ИНН, менеджер проверит
+        accept_inn(state, state['inn_rejected'])
+        if state.get('offer_id'):
+            return queue_quote(db, row, state, catalog)
+    if text and not state.get('awaiting_customer') and QUOTE_REQUISITES.search(text) and state.get('flow') != 'mdaemon':
         remember_quote_customer(state, text)
-        if tool == 'draft_quote' and all(state.get(field) for field in ('customer', 'inn', 'kpp')):
+        if state.get('flow') == 'cryptopro' and state.get('offer_id') and state.get('quantity'):
+            return queue_quote(db, row, state, catalog)
+    if state.get('awaiting_customer') and text and (QUOTE_REQUISITES.search(text) or re.search(r'\b(?:ооо|ао|пао|зао|ип|гбу|мбу|фгуп)\b|[«"]', query)
+                                                    or INN_FORMAT.search(text)):
+        remember_quote_customer(state, text)
+        if tool == 'draft_quote' and state.get('customer') and state.get('inn') and (state.get('kpp') or len(state['inn']) == 12):
             append_event(db, row['id'], 'model_tool_executed', tool)
         return queue_quote(db, row, state, catalog)
     if state.get('flow') == 'mdaemon' and QUOTE_REQUISITES.search(text):
@@ -331,22 +413,50 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['offer_id'] = offers[0]
             remember_quote_customer(state, text)
             return queue_quote(db, row, state, catalog)
-    if re.search(r'оператор|тендер|госзакупк|запросить цену', query):
+    if re.search(r'оператор|тендер|госзакупк', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
-        return 'Закрывающие документы по заказу проверьте в личном кабинете Store: https://store.softline.ru/ — войдите и откройте заказ. Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
+        hint = 'Закрывающие документы по заказу есть в личном кабинете Store: https://store.softline.ru/ — откройте заказ. '
+        if re.search(r'оплачен|переслать|переда|пришлите|отправьте|нужен|нужны', query):
+            return hint + enter_queue(db, row, state, 'closing_documents'), []
+        return hint + 'Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
     if re.search(r'статус\s+заказа|(?:где|получить|пришел|найти).{0,25}ключ\w*\s*(?:лицензи|заказа|$)', query):
         return 'Статус и данные электронной доставки проверяются в вашем заказе в личном кабинете Store: https://store.softline.ru/. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
     match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*%', query)
     discount = Decimal(match.group(1).replace(',', '.')) if match else None
     if action == 'more_discount' or re.search(r'(?:больш|выше).{0,35}(?:скид|купон|%)|(?:скид|купон).{0,30}(?:больш|выше)', query) or (discount is not None and discount > 5):
         return enter_queue(db, row, state, 'discount_over_limit'), []
+    if action != 'deferral' and re.search(r'скидк|купон', query) and not re.search(r'отсроч|постоплат', query):
+        general = catalog_turn(catalog, state, text, queue=lambda reason: enter_queue(db, row, state, reason),
+                               quote=lambda: queue_quote(db, row, state, catalog))
+        product = lookup(catalog, state['offer_id']) if state.get('offer_id') else None
+        if product and product['price_kopecks']:
+            qty = purchasable_units(product, state['quantity']) if state.get('quantity') else 1
+            qty = qty or state.get('quantity') or 1
+            total = product['price_kopecks'] * qty
+            percent = int(discount) if discount is not None else 5
+            state['coupon_percent'] = str(percent)
+            append_event(db, row['id'], 'demo_coupon_offered', str(percent))
+            head = (general[0] + '\n') if general and general[0] and 'Нашёл' in general[0] else ''
+            if not head:  # называем позицию и карточку: клиент и проверка видят, от какой цены скидка
+                head = f'{product["name"]}' + (f' ({product["url"]})' if product.get('url') else '') + (f', {qty} шт.' if qty > 1 else '') + '.\n'
+            return (head + f'Со скидкой {percent}%: {chat_price(total * (100 - percent) // 100)} вместо {chat_price(total)}. '
+                    'Скидку до 5% даю сам по купону, больше — только через менеджера.'), [('Подготовить КП', 'quote', ''), ('Запросить больше', 'more_discount', '')]
+        if general and state.get('g_family'):
+            return general[0] + '\nСкидку до 5% даю сам по купону, больше — через менеджера.', general[1]
     if action == 'deferral' or re.search(r'отсроч|постоплат|скидк|купон', query):
         percent = discount if discount is not None else 5
         state['coupon_percent'] = str(percent)
         append_event(db, row['id'], 'demo_coupon_offered', str(percent))
         return f'Оплата по оферте — предоплата. Предлагаю демонстрационный купон на {percent}%. За большей скидкой подключу менеджера.', [('Запросить больше', 'more_discount', ''), *JOIN_MANAGER]
-    if CRYPTO_NAME.search(query):
+    annual = bool(re.search(r'\bна\s+год|годов', query)) and (
+        not re.search(r'бессроч', query) or bool(re.search(r'бессрочн\w*\s+(?:отпада|не\s+нужн|не\s+подход|не\s+надо)|передумал', query)))
+    if annual and state.get('flow') == 'cryptopro':
+        # клиент передумал: годовая вместо бессрочной — дальше общий разговор по каталогу
+        state['flow'] = None
+        for key in ('offer_id', 'offered_ids', 'awaiting_customer'):
+            state.pop(key, None)
+    if CRYPTO_NAME.search(query) and not CRYPTO_OTHER.search(query) and not re.search(r'физ\w*\s*лиц', query) and not annual:
         state.update(flow='cryptopro', query=text)
         state.pop('offer_id', None)
         state.pop('offered_ids', None)
@@ -361,12 +471,16 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         return '«Смоленск» нужен для рабочей станции или для сервера?', []
     if state.get('flow') == 'smolensk' and re.search(r'рабоч\w+|сервер', query):
         return 'Точный артикул и цену для этой комплектации нужно сверить. ' + enter_queue(db, row, state, 'price_confirmation'), []
-    if NEEDS_QUERY.search(query):
+    if NEEDS_QUERY.search(query) and not state.get('g_family'):
         append_event(db, row['id'], 'requirements_understood', 'software_protection')
         state.update(flow='needs', query=text)
         if tool == 'clarify_requirements':
             append_event(db, row['id'], 'model_tool_executed', tool)
             return collect_selection(state, catalog, db, row['id'])
+    if state.get('flow') == 'cryptopro' and not state.get('offer_id') and action != 'placement' and not re.search(r'сервер', query) and (
+            re.search(r'\d+\s*мест|рабоч\w*\s+мест|рабоч\w*\s+станц', query)
+            or (re.search(r'\bcsp\b|\bксп\b|5\.0', query) and re.search(r'бессроч', query))):
+        action, value = 'placement', 'workstation'
     if action == 'placement' or (state.get('flow') == 'cryptopro' and re.search(r'рабоч\w*\s+мест|\bсервер\w*', query)):
         placement = value if action == 'placement' else 'server' if 'сервер' in query else 'workstation'
         if placement == 'server':
@@ -380,6 +494,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         line = f'{product["name"]} — {chat_price(product["price_kopecks"])}. {product["url"]}'
         if state.get('quantity'):
             state['awaiting_customer'] = True
+            if re.search(r'\bинн\b', query):  # заказ и реквизиты в одной реплике — сразу КП
+                remember_quote_customer(state, text)
+                return queue_quote(db, row, state, catalog)  # недостающее или ошибочное поле назовёт сама проверка
             amount = product['price_kopecks'] * state['quantity']
             return f'{line}\nНа {state["quantity"]} шт. — {chat_price(amount)}. {QUOTE_CUSTOMER_PROMPT}', [('Подготовить КП', 'quote', '')]
         return f'{line}\nСколько рабочих мест?', [('Подготовить КП', 'quote', '')]
@@ -412,7 +529,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if action == 'focus' and value in {'mail', 'all'}:
             state['focus'] = value
         elif state['flow'] == 'needs' and not state.get('focus') and not NEEDS_QUERY.search(query):
-            if re.search(r'\b(?:вместе|и почта,?\s+и файлы|почт\w+.{0,70}компьютер)', query):
+            if re.search(r'\b(?:вместе|и почта,?\s+и файлы|почт\w+.{0,70}компьютер|компьютер\w*.{0,40}почт)', query):
                 state['focus'] = 'all'
             elif re.search(r'\b(?:только|сначала)\s+почт', query):
                 state['focus'] = 'mail'
@@ -427,6 +544,10 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
                 append_event(db, row['id'], 'model_tool_executed', tool)
                 return collect_selection(state, catalog, db, row['id'])
         return collect_selection(state, catalog, db, row['id'], registry)
+    general = catalog_turn(catalog, state, text, queue=lambda reason: enter_queue(db, row, state, reason),
+                           quote=lambda: queue_quote(db, row, state, catalog), page_url=page_url)
+    if general is not None:
+        return general
     candidates = resolve_product(catalog, text, state.get('quantity'), page_url)
     if candidates:
         if len(candidates) == 1 and (not candidates[0]['available'] or candidates[0]['price_kopecks'] is None):
@@ -446,5 +567,5 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         return 'Какую задачу должно решить ПО? Например, защитить почту и файлы. Укажите примерное число сотрудников.', JOIN_MANAGER
     if PURCHASE_WORDS.search(query) or action in ('price', 'invoice') or intent_hint in {'price', 'quote', 'invoice'}:
         state['flow'] = 'awaiting_product'
-        return 'Пришлите название, артикул или ссылку на карточку товара. Проверю цены и варианты по каталогу.', JOIN_MANAGER
-    return 'Помогу подобрать ПО или позову оператора. Напишите название продукта или расскажите, какую задачу нужно решить.', JOIN_MANAGER
+        return 'Какой продукт нужен? Напишите название, артикул или ссылку на карточку — проверю цену по каталогу.', JOIN_MANAGER
+    return 'Подскажите, какой продукт или какую задачу нужно решить? Подберу по каталогу или позову оператора.', JOIN_MANAGER

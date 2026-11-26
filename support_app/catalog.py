@@ -1,4 +1,5 @@
 import argparse
+import html
 import json
 import re
 import sqlite3
@@ -87,7 +88,7 @@ def user_range(title: str, params: dict[str, str]) -> tuple[int | None, int | No
 
 def add_offer(db: sqlite3.Connection, node, categories: dict[str, str]):
     offer_id = node.get('id')
-    title = node.findtext('name', '').strip()
+    title = html.unescape(node.findtext('name', '')).strip()  # в фиде встречается двойное экранирование: &quot;
     if not offer_id or not title:
         return
 
@@ -152,6 +153,7 @@ def view(row: sqlite3.Row) -> dict:
     item = dict(row)
     item.pop('rank', None)
     item['available'] = bool(item['available'])
+    item['name'] = html.unescape(item['name'])
     item['parameters'] = json.loads(item['parameters'])
     return item
 

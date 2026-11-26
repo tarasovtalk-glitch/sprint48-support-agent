@@ -38,7 +38,7 @@ DEMO_SOURCE = Path(__file__).with_name('demo.json')
 
 
 class Message(BaseModel):
-    text: str | None = Field(default=None, min_length=1, max_length=1000)
+    text: str | None = Field(default=None, max_length=20000)
     action: Literal['price', 'quote', 'invoice', 'deferral', 'placement', 'focus', 'term',
                     'deployment', 'select_offer', 'handoff', 'more_discount'] | None = None
     value: str = Field(default='', max_length=32)
@@ -49,10 +49,9 @@ class Message(BaseModel):
     def one_input(self):
         if (self.text is None) == (self.action is None):
             raise ValueError('Provide exactly one of text or action.')
-        if self.text is not None and not self.text.strip():
-            raise ValueError('Enter a message.')
-        if self.text is not None and len(self.text.encode('utf-8')) > 2500:
-            raise ValueError('Message is too long.')
+        if self.text is not None and len(self.text) > 1000:
+            # длинное письмо клиента не отклоняем ошибкой: берём начало, где обычно сам вопрос
+            self.text = self.text[:1000].rsplit(' ', 1)[0]
         return self
 
 
