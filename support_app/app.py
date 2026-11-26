@@ -208,13 +208,13 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         with store.connect(write=True) as db:
             db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)', (case_id, token_hash(session_token), json.dumps(scenario.offer())))
             append_event(db, case_id, 'opened', scenario.source)
-            view = case_view(get_case(db, case_id))
+            view = case_view(get_case(db, case_id), use_fixture=not chat_only)
         return {'session_token': session_token, 'case': view}
 
     @app.get(PREFIX + '/case')
     def my_case(case_id: str = Depends(client)):
         with store.connect() as db:
-            return case_view(get_case(db, case_id))
+            return case_view(get_case(db, case_id), use_fixture=not chat_only)
 
     @app.get(PREFIX + '/case/messages')
     def client_messages(after: int | None = Query(default=None, ge=0), case_id: str = Depends(client)):
@@ -245,7 +245,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 reply_buttons = buttons(choices)
                 agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
                 return {'reply': reply, 'intent': 'chat', 'document_url': None, 'buttons': reply_buttons,
-                        'case': case_view(get_case(db, case_id)), 'messages': [client_entry, agent_entry]}
+                        'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
         intent = payload.action or classify(store, case_id, payload.text, api_key=model_key, model_uri=model_uri, daily=daily_limit, total=total_limit)
         document_url = None
         with store.connect(write=True) as db:
@@ -332,7 +332,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
-                cases.append({**case_view(row), 'reason': context.get('queue_reason'),
+                cases.append({**case_view(row, use_fixture=not chat_only), 'reason': context.get('queue_reason'),
                               'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None,
                               'created': row['created'], 'updated': row['last_message'] or row['created'],
                               'first_client_message': row['first_client_message']})
@@ -351,7 +351,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             if row['decision_key'] == str(decision.request_id):
                 if row['decision_choice'] != decision.choice or row['version'] != decision.version + 1 or row['decision_note'] != decision.note:
                     raise HTTPException(409, 'Request ID was already used.')
-                result = case_view(row)
+                result = case_view(row, use_fixture=not chat_only)
                 if chat_only:
                     entry = db.execute("SELECT document_url FROM chat_messages WHERE case_id=? AND role='manager' ORDER BY id DESC LIMIT 1", (case_id,)).fetchone()
                     result['document_url'] = entry['document_url'] if entry else None
@@ -383,7 +383,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     append_event(db, case_id, 'catalog_quote_sent')
                 default = 'Коммерческое предложение готово.' if document_url else 'Менеджер рассмотрел запрос.'
                 save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
-                return {**case_view(get_case(db, case_id)), 'document_url': document_url}
+                return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
                 queue_mail(db, case_id, 'approved', offer)

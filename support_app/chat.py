@@ -16,6 +16,10 @@ NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|фай�
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
 EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|запросить цену|тендер|госзакупк')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
+MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
+SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
+WINDOWS_PRO = re.compile(r'\bwindows\s+11\s+pro\b')
+OFFICE_HOME = re.compile(r'\b(?:дома|для дома|домашн\w*)\b.{0,40}\b(?:office|офис)\b|\b(?:office|офис)\b.{0,40}\bдля дома\b')
 TEXT_TERMS = (
     (12, re.compile(r'\b12\s*месяц|\bна\s+(?:1\s+год|один\s+год|год)(?:\s|$|[,.!?])')),
     (24, re.compile(r'\b24\s*месяц|\bна\s+(?:2|два)\s+год')),
@@ -136,6 +140,11 @@ def resolve_product(catalog: Path, text: str, quantity: int | None, page_url: st
             found = lookup(catalog, offer_id)
             if found:
                 return [found]
+    query = normalize(text)
+    card_id = '380385' if WINDOWS_PRO.search(query) else '473568' if OFFICE_HOME.search(query) else None
+    if card_id:
+        card = lookup(catalog, card_id)
+        return [card] if card else []
     sku_tokens = [t for t in re.findall(r'\b[A-Z][A-Z0-9_.-]{4,29}\b', text) if any(c.isdigit() for c in t)][:3]
     phrases = re.findall(r'[«"]([^»"\r\n]{4,65})[»"]', text)[:3]
     if not phrases and PURCHASE_WORDS.search(normalize(text)):
@@ -241,16 +250,19 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     if state['flow'] == 'needs':
         if not state.get('focus'):
             return 'Выбираем защиту для почты и файлов вместе или начинаем с почты?', [('И почта, и файлы', 'focus', 'all'), ('Сначала почта', 'focus', 'mail')]
+    if state['flow'] == 'mdaemon' and not state.get('quantity'):
+        edition = 'Редакцию MDaemon Standard в фиде не нашёл. Могу проверить MDaemon Messaging Server. ' if state.get('standard_requested') else ''
+        return edition + 'На сколько пользователей нужна лицензия?', []
     if not state.get('term'):
         return 'На какой срок нужна лицензия?', [('12 месяцев', 'term', '12'), ('24 месяца', 'term', '24')]
-    if not state.get('deployment'):
+    if not state.get('deployment') and state['flow'] != 'mdaemon':
         return 'Где будет работать решение?', [('Свои серверы', 'deployment', 'local'), ('Облако', 'deployment', 'cloud'), ('Оба варианта', 'deployment', 'flexible')]
     if not state.get('quantity'):
         return 'Сколько пользователей или устройств нужно покрыть?', []
     query = 'защита почты' if state.get('focus') == 'mail' else state['query']
     req = Selection(mode='known' if state['flow'] == 'mdaemon' else 'needs',
                     query=query, product='MDaemon Standard' if state['flow'] == 'mdaemon' else '',
-                    users=state['quantity'], term_months=state['term'], deployment=state['deployment'], require_registry=registry)
+                    users=state['quantity'], term_months=state['term'], deployment=state.get('deployment', 'flexible'), require_registry=registry)
     append_event(db, case_id, 'registry_lookup' if registry else 'catalog_search', req.mode)
     with closing(read_only(catalog)) as catalog_db:
         result = selection_result(catalog_db, req)
@@ -314,6 +326,15 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state.pop('offered_ids', None)
     if MDAEMON_NAME.search(query):
         state.update(flow='mdaemon', query=text)
+        if MDAEMON_STANDARD.search(query):
+            state['standard_requested'] = True
+    if re.search(r'\b(?:pam\s+indeed|indeed\s+pam)\b', query):
+        return 'Не нашёл Indeed PAM в каталоге. ' + enter_queue(db, row, state, 'not_in_catalog'), []
+    if SMOLENSK.search(query):
+        state['flow'] = 'smolensk'
+        return '«Смоленск» нужен для рабочей станции или для сервера?', []
+    if state.get('flow') == 'smolensk' and re.search(r'рабоч\w+|сервер', query):
+        return 'Точный артикул и цену для этой комплектации нужно сверить. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if NEEDS_QUERY.search(query):
         append_event(db, row['id'], 'requirements_understood', 'software_protection')
         state.update(flow='needs', query=text)

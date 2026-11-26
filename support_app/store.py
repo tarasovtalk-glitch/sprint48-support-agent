@@ -164,12 +164,12 @@ def queue_mail(db: sqlite3.Connection, case_id: str, kind: str, offer: dict):
     ''', (f'{case_id}-{kind}', case_id, kind, json.dumps(offer)))
 
 
-def case_view(case: sqlite3.Row) -> dict:
+def case_view(case: sqlite3.Row, *, use_fixture: bool = True) -> dict:
     return {
         'id': case['id'],
         'state': case['state'],
         'version': case['version'],
-        'offer': json.loads(case['offer']),
+        'offer': json.loads(case['offer']) if use_fixture else None,
         'payment_due': case['payment_due'],
         'decision_note': case['decision_note'],
     }
