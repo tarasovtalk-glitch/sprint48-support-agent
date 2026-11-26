@@ -233,10 +233,10 @@
   function answerBlock(c) {
     var d = draft(c);
     if (d.reply == null) d.reply = c.reply_draft || '';
-    if (d.help == null) d.help = true;
+    if (d.help == null) d.help = c.help_option !== false; // переключатель «в справку» только там, где сервер это умеет
     return '<div class="case__block"><div class="case__advice-head">' + BOT + 'Сводка агента</div><p>' + t(c.advice) + '</p>' +
       '<label class="case__effect"><span class="case__block-title">Ответ для клиента</span><textarea class="textarea" rows="2" data-draft="reply" data-id="' + esc(c.id) + '" placeholder="Что передать клиенту">' + esc(d.reply) + '</textarea></label>' +
-      '<label class="switch"><input type="checkbox" data-draft="help" data-id="' + esc(c.id) + '"' + (d.help ? ' checked' : '') + '>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' +
+      (c.help_option === false ? '' : '<label class="switch"><input type="checkbox" data-draft="help" data-id="' + esc(c.id) + '"' + (d.help ? ' checked' : '') + '>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>') +
       (c.effect ? '<div class="case__effect"><p class="case__effect-title">Что сделает агент</p><p>' + t(c.effect) + '</p></div>' : '') +
       '<div class="case__buttons"><button class="btn btn--primary" type="button" data-act="answer" data-id="' + esc(c.id) + '"' + (d.reply.trim() ? '' : ' disabled') + '>Ответить клиенту</button></div></div>';
   }

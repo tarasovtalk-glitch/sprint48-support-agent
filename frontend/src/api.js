@@ -3,15 +3,16 @@
    их запросы в вызовы сервера и ответы сервера обратно в форму, которую рисуют экраны.
 
    Ключей здесь нет:
-   - X-Demo-Key подставляет веб-сервер перед API (nginx на стенде, scripts/serve.mjs локально);
+   - X-Demo-Key подставляет веб-сервер перед API и только для POST /sessions (Caddy на стенде, scripts/serve.mjs локально),
+     дальше чат ходит с токеном разговора;
    - ключ менеджера кабинет спрашивает один раз полем и держит до закрытия вкладки.
+   Историю разговора хранит сервер: чат восстанавливает её после перезагрузки и опрашивает новые реплики по after.
    Чего в API пока нет, отвечает 404: экран тогда показывает пример и пишет об этом строкой сверху. */
 (function () {
   'use strict';
   var CFG = window.SUPPORT_CONFIG || {};
   var API = String(CFG.apiBase || '/support/api').replace(/\/$/, '');
   var MANAGER_KEY = 'sl-manager-key';
-  var LOG = 'sl-support-log:';
 
   function fail(status, text) { var e = new Error(text || 'HTTP ' + status); e.status = status; return e; }
   function raw(method, path, body, headers) {
@@ -33,84 +34,66 @@
   }
   function nowIso() { return new Date().toISOString(); }
   function rub(kopecks) { return Math.round(kopecks) / 100; }
-  function rubText(kopecks) { return rub(kopecks).toLocaleString('ru-RU', { minimumFractionDigits: 2 }).replace(/\s/g, ' ') + ' ₽'; }
-  function dmy(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : iso || ''; }
   // время журнала из SQLite приходит как «ГГГГ-ММ-ДД ЧЧ:ММ:СС» в UTC
   function utc(s) { return s && !/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s.replace(' ', 'T') + 'Z' : s; }
-  function total(o) { return o.renewal_total_kopecks != null ? o.renewal_total_kopecks : (o.renewal_unit_kopecks || 0) * (o.quantity || 0); }
 
   /* ---------- Чат ---------- */
-  var ACTIONS = { price: 'price', quote: 'quote', invoice: 'invoice', deferral: 'deferral' };
+  // запасные кнопки, если сервер не прислал своих и не понял фразу (старый режим сервера без истории)
   var CHOICE = [
-    { id: 'price', text: 'Узнать цену' }, { id: 'quote', text: 'Получить КП' },
-    { id: 'invoice', text: 'Выставить счёт' }, { id: 'deferral', text: 'Нужна отсрочка' }
+    { label: 'Узнать цену', action: 'price', value: '' }, { label: 'Получить КП', action: 'quote', value: '' },
+    { label: 'Выставить счёт', action: 'invoice', value: '' }, { label: 'Нужна отсрочка', action: 'deferral', value: '' }
   ];
   var GREETING = 'Здравствуйте! Я ИИ-помощник магазина, отвечаю сразу по каталогу, заказам и счетам. Что не решу сам, передам менеджеру вместе с перепиской.';
-  var FILES = { quote: 'Коммерческое предложение.pdf', invoice: 'Черновик счёта.pdf' };
-
-  // У сервера нет истории сообщений, поэтому переписку держим во вкладке: после перезагрузки она та же
-  function chatLog(sid) { try { return JSON.parse(read(LOG + sid) || 'null'); } catch (e) { return null; } }
-  function saveLog(sid, log) { write(LOG + sid, JSON.stringify(log)); }
-  function push(log, m) { m.seq = ++log.seq; m.time = m.time || nowIso(); log.messages.push(m); return m; }
+  var FILE_NAME = 'Коммерческое предложение.pdf';
+  var pressable = {}, pressSeq = 0; // id кнопки на экране → {action, value} для сервера
   function bearer(sid) { return { Authorization: 'Bearer ' + sid }; }
 
-  // что сказать клиенту, когда менеджер решил: текст из состояния обращения и заметки менеджера
-  function decisionMessage(view) {
-    var note = view.decision_note ? ' ' + view.decision_note : '';
-    if (view.state === 'approved') return 'Менеджер согласовал отсрочку. Оплатить до ' + dmy(view.payment_due) + '.' + note;
-    if (view.state === 'rejected') return 'Менеджер отказал в отсрочке.' + note;
-    return '';
+  // реплика сервера {id, role, text, document_url, buttons, created} → сообщение экрана
+  function toMessage(r, keepButtons) {
+    var m = { seq: r.id, from: r.role, type: r.document_url ? 'file' : 'text', text: r.text || '', time: utc(r.created) };
+    if (r.document_url) m.file = { name: FILE_NAME, url: r.document_url };
+    if (keepButtons && r.buttons && r.buttons.length) {
+      m.buttons = r.buttons.filter(function (b) { return b && b.label && b.action; }).map(function (b, i) {
+        var id = 'b' + (++pressSeq);
+        pressable[id] = { action: b.action, value: b.value || '' };
+        return { id: id, text: b.label };
+      });
+    }
+    return m;
+  }
+  // кнопки-ответы живы только у последней реплики агента: старые после перезагрузки не возвращаем
+  function toMessages(list) {
+    var last = -1;
+    list.forEach(function (r, i) { if (r.role !== 'client') last = i; });
+    return list.map(function (r, i) { return toMessage(r, i === last); });
   }
 
   function chatOpen() {
     return raw('POST', '/sessions').then(function (r) {
-      var sid = r.session_token, log = { seq: 0, messages: [], state: r.case && r.case.state, version: r.case && r.case.version };
-      push(log, { from: 'agent', type: 'text', text: GREETING });
-      saveLog(sid, log);
-      return { session_id: sid, messages: log.messages.slice() };
+      return { session_id: r.session_token, messages: [{ from: 'agent', type: 'text', text: GREETING }] };
     });
   }
 
   function chatSend(sid, data) {
-    var log = chatLog(sid); if (!log) return Promise.reject(fail(404));
-    var action = data.button_id && ACTIONS[data.button_id];
-    var body = action ? { action: action, channel: 'chat' } : { text: data.text, channel: 'chat' };
-    push(log, { from: 'client', type: 'text', text: data.text });
-    var start = log.seq;
+    var b = data.button_id && pressable[data.button_id];
+    var body = b ? { action: b.action, value: b.value } : { text: data.text };
     return raw('POST', '/case/messages', body, bearer(sid)).then(function (r) {
-      var m = { from: 'agent', type: r.document_url ? 'file' : 'text', text: r.reply };
-      if (r.document_url) m.file = { name: FILES[r.intent] || 'Документ.pdf', url: r.document_url };
-      // сервер не понял фразу: даём те же варианты кнопками-ответами, без скидок
-      if (r.intent === 'unknown') m.buttons = CHOICE;
-      push(log, m);
-      if (r.case) { log.state = r.case.state; log.version = r.case.version; }
-      saveLog(sid, log);
-      return { messages: log.messages.slice(start) };
-    }, function (e) { saveLog(sid, log); throw e; });
+      if (Array.isArray(r.messages)) return { messages: toMessages(r.messages) };
+      // сервер без истории сообщений: собираем ответ из reply
+      var list = Array.isArray(r.buttons) && r.buttons.length ? r.buttons : r.intent === 'unknown' ? CHOICE : [];
+      var m = toMessage({ role: 'agent', text: r.reply, document_url: r.document_url, buttons: list }, true);
+      delete m.seq;
+      return { messages: [m] };
+    });
   }
 
-  // раз в 3 секунды: не решил ли менеджер. Новое сообщение появляется только при смене состояния
+  // after = 0: вся беседа после перезагрузки страницы, иначе только новые реплики (ответ менеджера, PDF)
   function chatPoll(sid, after) {
-    var log = chatLog(sid); if (!log) return Promise.reject(fail(404));
-    var since = function () { return { messages: log.messages.filter(function (m) { return m.seq > after; }) }; };
-    // восстановление после перезагрузки: кнопки-ответы живы только у последнего сообщения
-    if (after === 0) {
-      var last = log.messages.length - 1;
-      return Promise.resolve({ messages: log.messages.map(function (m, i) {
-        if (i === last || !m.buttons) return m;
-        var c = {}; for (var k in m) if (k !== 'buttons') c[k] = m[k]; return c;
-      }) });
-    }
-    return raw('GET', '/case', null, bearer(sid)).then(function (view) {
-      if (view.version !== log.version) {
-        var was = log.state; log.state = view.state; log.version = view.version;
-        if (was === 'pending' && view.state !== 'pending') {
-          var text = decisionMessage(view);
-          if (text) push(log, { from: 'agent', type: 'text', text: text });
-        }
-        saveLog(sid, log);
-      }
-      return since();
+    var q = after ? '?after=' + after : '';
+    return raw('GET', '/case/messages' + q, null, bearer(sid)).then(function (r) {
+      var list = toMessages(r.messages || []);
+      if (!after) list.unshift({ from: 'agent', type: 'text', text: GREETING });
+      return { messages: list };
     });
   }
 
@@ -123,32 +106,60 @@
     });
   }
 
+  // почему агент позвал менеджера: заголовок карточки, сводка и что произойдёт после ответа
+  var REASON = {
+    quote_review: { title: 'Проверить КП' },
+    discount_over_limit: { title: 'Клиент просит скидку больше 5%', advice: 'Агент предложил купон 5% по правилу магазина, клиент просит больше. Решите, что ответить: агент передаст ваш ответ в чат.' },
+    customer_request: { title: 'Клиент просит оператора', advice: 'Клиент попросил живого человека или пишет о тендере. Переписка ниже, ответьте ему в тот же чат.' },
+    server_license: { title: 'Лицензия на сервер', advice: 'Клиенту нужна серверная лицензия, агент не называл её цену. Напишите клиенту цену и условия.' },
+    price_confirmation: { title: 'Уточнить цену', advice: 'В каталоге нет цены или позиция недоступна. Напишите клиенту цену и срок.' },
+    catalog_unavailable: { title: 'Позиция недоступна в каталоге', advice: 'Агент не нашёл позицию в каталоге. Ответьте клиенту, что предложить вместо неё.' }
+  };
   var STATUS = { pending: 'waiting', approved: 'approved', rejected: 'refused', open: 'waiting' };
-  var REFUSE = 'Отсрочка не положена по условиям магазина';
+
   function toCase(v) {
-    var o = v.offer || {}, days = o.requested_days;
-    var c = {
-      id: v.id, version: v.version, kind: 'approve', status: STATUS[v.state] || 'waiting',
-      title: (o.customer || 'Клиент') + ': отсрочка ' + days + ' дней',
-      amount_rub: rub(total(o)),
-      desc: [o.product, o.quantity ? o.quantity + ' узлов' : '', o.previous_order ? 'прошлый заказ № ' + o.previous_order : ''].filter(Boolean).join(' · '),
-      approve_label: 'Согласовать ' + days + ' дней',
-      effect: 'Агент сразу напишет клиенту в чат, до какого числа оплатить',
-      refuse_reasons: [REFUSE],
-      refuse_reply: 'Отсрочку согласовать не можем: по условиям магазина счёт оплачивается до отгрузки.',
-      decided_at: null, decided_by: null, result: null
-    };
-    if (v.state === 'approved') c.result = 'Согласовано. Агент написал клиенту: оплатить до ' + dmy(v.payment_due);
-    if (v.state === 'rejected') c.result = 'Отказано. Агент передал клиенту ответ' + (v.decision_note ? ': ' + v.decision_note : '');
-    if (v.state !== 'pending') c.decided_at = nowIso();
+    var q = v.quote, why = REASON[v.reason] || { title: 'Запрос клиента', advice: 'Агент передал разговор менеджеру. Переписка ниже.' };
+    var who = q && q.customer ? q.customer : 'Посетитель сайта';
+    var c = { id: v.id, version: v.version, status: STATUS[v.state] || 'waiting', reason: v.reason, decided_at: null, decided_by: null, result: null };
+    if (q) {
+      var offer = q.offer || {};
+      c.kind = 'approve';
+      c.title = who + ': КП, ' + (offer.name || 'позиция каталога');
+      c.amount_rub = rub(q.amount_kopecks || 0);
+      c.desc = [q.quantity ? q.quantity + ' шт.' : '', q.inn ? 'ИНН ' + q.inn : '', q.payment_terms || '', q.vat_status || ''].filter(Boolean).join(' · ');
+      c.approve_label = 'Отправить КП в чат';
+      c.effect = 'Клиент получит PDF коммерческого предложения в этом же чате';
+      c.refuse_reasons = ['Позиция не подходит под задачу клиента'];
+      c.refuse_reply = 'Проверили запрос: эта позиция вам не подойдёт. Подскажу другой вариант здесь же, в чате.';
+    } else {
+      c.kind = 'answer';
+      c.title = why.title;
+      c.desc = who;
+      c.advice = why.advice;
+      c.help_option = false;
+      c.effect = 'Агент передаст ваш ответ клиенту в тот же чат';
+    }
     return c;
+  }
+  function decidedCase(c, v) {
+    var next = {}; for (var k in c) next[k] = c[k];
+    next.version = v.version; next.status = STATUS[v.state] || c.status; next.decided_at = nowIso();
+    if (c.kind === 'answer' && v.state !== 'pending') next.status = 'answered';
+    if (next.status === 'approved') next.result = v.document_url ? 'КП отправлено клиенту в чат' : 'Ответ отправлен клиенту';
+    if (next.status === 'refused') next.result = 'Отказано. Клиент получил ответ в чате' + (v.decision_note ? ': ' + v.decision_note : '');
+    if (next.status === 'answered') next.result = 'Ответ отправлен клиенту: ' + (v.decision_note || '');
+    return next;
   }
 
   var known = {}, attempts = {};
   function casesList() {
     return manager('GET', '/manager/cases').then(function (r) {
-      var list = (r.cases || []).map(toCase);
-      list.forEach(function (c) { known[c.id] = c; });
+      // тот же случай отдаём тем же объектом: кабинет дописывает в него переписку, пока идёт обновление очереди
+      var list = (r.cases || []).map(function (v) {
+        var c = toCase(v), was = known[c.id];
+        if (was && was.version === c.version && was.status === c.status) return was;
+        known[c.id] = c; return c;
+      });
       // решённые здесь за сессию остаются на экране, сервер отдаёт только ожидающие
       Object.keys(known).forEach(function (id) {
         if (known[id].status !== 'waiting' && !list.some(function (c) { return c.id === id; })) list.push(known[id]);
@@ -158,33 +169,29 @@
     });
   }
 
+  // approve: КП уходит клиенту (или ответ менеджера), reject: отказ с текстом. reply необязателен, до 400 знаков
   function decide(id, body) {
     var c = known[id]; if (!c) return Promise.reject(fail(404));
-    var choice = body.action === 'approve' ? 'approve' : 'reject';
-    var note = choice === 'reject' ? String(body.reply_text || body.reason || '').slice(0, 500) : '';
+    var choice = body.action === 'refuse' ? 'reject' : 'approve';
+    var reply = String(body.reply_text || '').trim().slice(0, 400);
     // повтор после обрыва связи идёт с тем же request_id, сервер не решит дважды
-    var key = id + ':' + c.version + ':' + choice + ':' + note;
+    var key = id + ':' + c.version + ':' + choice + ':' + reply;
     var rid = attempts[key] || (attempts[key] = uuid());
-    return manager('POST', '/manager/cases/' + encodeURIComponent(id) + '/decision',
-      { choice: choice, version: c.version, request_id: rid, note: note }).then(function (v) {
-      var next = toCase(v); known[id] = next; return next;
+    var data = { choice: choice, version: c.version, request_id: rid };
+    if (reply) data.reply = reply;
+    return manager('POST', '/manager/cases/' + encodeURIComponent(id) + '/decision', data).then(function (v) {
+      var next = decidedCase(c, v); known[id] = next; return next;
     }, function (e) {
       if (e.status === 409) toastText('Обращение уже изменилось. Обновите страницу');
       throw e;
     });
   }
 
-  var EVENT = {
-    received: 'Клиент написал в чат', price_calculated: 'Агент посчитал цену', document_prepared: 'Агент подготовил документ',
-    rule_applied: 'Агент применил правило договора', sent_to_manager: 'Агент передал запрос менеджеру',
-    manager_decision: 'Менеджер принял решение', contract_rule_saved: 'Менеджер сохранил правило договора',
-    model_unavailable: 'Модель не ответила, агент спросил клиента кнопками', channel_result: 'Ответ клиенту'
-  };
+  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем
   function events(id) {
-    return manager('GET', '/manager/cases/' + encodeURIComponent(id) + '/journal').then(function (r) {
-      return { events: (r.events || []).map(function (e) {
-        return { actor: e.event === 'manager_decision' || e.event === 'contract_rule_saved' ? 'manager' : e.event === 'received' ? 'client' : 'agent',
-          text: EVENT[e.event] || e.event, time: utc(e.created) };
+    return manager('GET', '/manager/cases/' + encodeURIComponent(id) + '/messages').then(function (r) {
+      return { events: (r.messages || []).map(function (m) {
+        return { actor: m.role, text: m.text + (m.document_url ? '\n' + FILE_NAME : ''), time: utc(m.created) };
       }) };
     });
   }

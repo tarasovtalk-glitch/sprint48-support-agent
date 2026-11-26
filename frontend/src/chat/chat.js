@@ -136,7 +136,9 @@
   // Бот Webim шлёт только простой текст, кнопки, файлы и перевод на оператора.
   // Карточки и **полужирный** остаются для шага 2 (свой виджет поверх Webim), их видно только по адресу с #cards
   var CARDS = NEW;
-  function rich(s) { return CARDS ? esc(ty(s)).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') : esc(ty(s.replace(/\*\*/g, ''))); }
+  // ссылки из ответа сервера (карточка товара, справка) открываются в новой вкладке
+  function links(h) { return h.replace(/https?:\/\/[^\s<]*[^\s<.,;:!?)»]/g, function (u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>'; }); }
+  function rich(s) { return links(CARDS ? esc(ty(s)).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') : esc(ty(s.replace(/\*\*/g, '')))); }
   function bot(text, avatar, share) { return bubbleMsg('<div class="slc-bubble">' + rich(text) + '</div>', avatar, share); }
   // карточка с главными цифрами внутри ответа агента (как message-card в Фигме)
   function cardHtml(c) {
@@ -586,6 +588,8 @@
     }
     function send(text, buttonId, echoed) {
       text = String(text || '').trim(); if (!text) return;
+      // ответ клиента закрывает прежние кнопки-ответы: живы только кнопки последней реплики, как после перезагрузки
+      [].forEach.call(body.querySelectorAll('.slc-pills'), function (x) { x.remove(); });
       if (!echoed) me(text);
       busy++; typing(true);
       var data = { text: text }; if (buttonId) data.button_id = buttonId;

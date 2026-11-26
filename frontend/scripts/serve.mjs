@@ -3,7 +3,7 @@
 //   npm run preview      то же из dist (сначала npm run build)
 //   --no-api             без сервера: проверить, как интерфейс ведёт себя, если API не отвечает
 // Сервер агента: SUPPORT_API (по умолчанию http://127.0.0.1:8000). X-Demo-Key берётся из SUPPORT_DEMO_KEY
-// и подставляется здесь, как это делает nginx на стенде. В браузер ключ не попадает.
+// и подставляется только в POST /support/api/sessions, как это делает Caddy на стенде. В браузер ключ не попадает.
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +28,7 @@ http.createServer(async (req, res) => {
     if (!api) { res.writeHead(503); res.end(); return; }
     const headers = { ...req.headers, host: api.host };
     delete headers['x-demo-key'];
-    if (demoKey) headers['x-demo-key'] = demoKey;
+    if (demoKey && req.method === 'POST' && url.pathname === BASE + 'api/sessions') headers['x-demo-key'] = demoKey;
     const up = http.request({ hostname: api.hostname, port: api.port, path: req.url, method: req.method, headers }, (r) => {
       res.writeHead(r.statusCode, r.headers); r.pipe(res);
     });
