@@ -1,0 +1,49 @@
+{
+  "method": "live_model_with_scripted_continuations",
+  "sample_policy": "fixed_seed_stratified_regression_set_not_a_production_sample",
+  "real_first_messages": 40,
+  "official_examples": 2,
+  "model_usage": {
+    "revision": "9ac1ab48",
+    "attempted": 37,
+    "confirmed": 37,
+    "reserved_microrubles": 397900
+  },
+  "multiple_turns": 24,
+  "cases": 42,
+  "outcomes": {
+    "resolved_by_agent": 14,
+    "not_covered": 3,
+    "correct_handoff": 23,
+    "unexpected_handoff": 1,
+    "alternative_needs_confirmation": 1
+  },
+  "by_scenario": {
+    "price_exact": {
+      "resolved_by_agent": 9,
+      "not_covered": 1
+    },
+    "price_purchase": {
+      "resolved_by_agent": 5,
+      "not_covered": 2
+    },
+    "price_review": {
+      "correct_handoff": 8
+    },
+    "procurement": {
+      "correct_handoff": 8
+    },
+    "discount": {
+      "correct_handoff": 6,
+      "unexpected_handoff": 1
+    },
+    "mdaemon": {
+      "alternative_needs_confirmation": 1
+    },
+    "security": {
+      "correct_handoff": 1
+    }
+  },
+  "price_checks": 28,
+  "catalogue_price_matches": 28
+}

@@ -1,0 +1,72 @@
+{
+  "path": "loopback API on the live VPS",
+  "revision": "9ac1ab48",
+  "passes": 3,
+  "responses": 15,
+  "p50_seconds": 1.039,
+  "model_responses": 9,
+  "model_p50_seconds": 1.066,
+  "model_slowest_seconds": 1.523,
+  "samples": [
+    [
+      "understand",
+      1.059
+    ],
+    [
+      "scope",
+      0.012
+    ],
+    [
+      "term",
+      0.009
+    ],
+    [
+      "catalog",
+      1.136
+    ],
+    [
+      "registry",
+      1.523
+    ],
+    [
+      "understand",
+      0.982
+    ],
+    [
+      "scope",
+      0.01
+    ],
+    [
+      "term",
+      0.01
+    ],
+    [
+      "catalog",
+      1.306
+    ],
+    [
+      "registry",
+      1.039
+    ],
+    [
+      "understand",
+      1.066
+    ],
+    [
+      "scope",
+      0.009
+    ],
+    [
+      "term",
+      0.009
+    ],
+    [
+      "catalog",
+      1.054
+    ],
+    [
+      "registry",
+      1.143
+    ]
+  ]
+}
