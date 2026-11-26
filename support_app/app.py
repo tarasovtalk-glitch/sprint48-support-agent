@@ -62,6 +62,7 @@ class Decision(BaseModel):
     request_id: UUID
     note: str = Field(default='', max_length=400, validation_alias=AliasChoices('reply', 'note'))
     remember: bool = False  # сохранить ответ менеджера в базу знаний: следующий клиент с тем же вопросом получит его сразу
+    remember_question: str | None = Field(default=None, max_length=1000)  # вопрос для базы, если менеджер уточнил формулировку
 
 
 class RuleConfirmation(BaseModel):
@@ -407,9 +408,14 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     append_event(db, case_id, 'catalog_quote_sent')
                 default = 'Коммерческое предложение готово.' if document_url else 'Менеджер рассмотрел запрос.'
                 save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
+                knowledge = None
                 if decision.remember and decision.note.strip():
-                    remember_answer(db, case_id, None, decision.note)
-                return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url}
+                    try:
+                        knowledge = remember_answer(db, case_id, decision.remember_question, decision.note)
+                    except HTTPException as error:  # решение клиенту уходит, в базу не сохраняем и говорим менеджеру почему
+                        append_event(db, case_id, 'knowledge_rejected', str(error.detail)[:200])
+                        knowledge = {'saved': False, 'reason': error.detail}
+                return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url, 'knowledge': knowledge}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
                 queue_mail(db, case_id, 'approved', offer)
@@ -447,7 +453,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         append_event(db, case_id, 'knowledge_saved', str(entry['id']))
-        return entry
+        return {**entry, 'saved': True}
 
     @app.post(PREFIX + '/manager/cases/{case_id}/knowledge', dependencies=[Depends(manager)])
     def save_knowledge(case_id: str, payload: KnowledgeEntry):

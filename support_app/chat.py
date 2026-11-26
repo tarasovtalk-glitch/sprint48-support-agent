@@ -1,4 +1,5 @@
 import re
+import sqlite3
 from contextlib import closing
 from decimal import Decimal
 from pathlib import Path
@@ -354,17 +355,28 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 
+def knowledge_hit(db, row, state, text, query, count, action, tool):
+    """Ответ из базы знаний — только на вопрос без действия по сделке: не просьба об операторе, не количество,
+    не реквизиты, не ответ на вопрос бота. Сбой памяти не ломает разговор: пишем событие и идём обычным путём."""
+    if (not text or action or tool or count or state.get('awaiting_customer') or EXPLICIT_HANDOFF.search(query)
+            or re.search(r'\b(?:оператор|менеджер|специалист|человек)\w*', query)
+            or QUOTE_REQUISITES.search(text) or INN_FORMAT.search(text)):
+        return None
+    try:
+        known = find_answer(db, text)
+    except sqlite3.Error as error:
+        append_event(db, row['id'], 'knowledge_error', type(error).__name__)
+        return None
+    if known:
+        append_event(db, row['id'], 'knowledge_answer', str(known['id']))
+    return known
+
+
 def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url='', tool=None):
     query = normalize(text)
     state['turn_no'] = state.get('turn_no', 0) + 1
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
-    if text and not action and not state.get('awaiting_customer'):
-        known = find_answer(db, text)
-        if known:  # менеджер уже отвечал на такой вопрос и сохранил ответ в базу знаний
-            append_event(db, row['id'], 'knowledge_answer', str(known['id']))
-            return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
-                    + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
     count_query = digits(query)
     correction = CORRECTION.search(count_query)
     count = correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
@@ -395,6 +407,10 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         return enter_queue(db, row, state, reason), []
     if action == 'handoff' or re.search(r'(?:позови|подключи|соедини)\w*\s+(?:с\s+)?(?:оператор|менеджер)', query):
         return enter_queue(db, row, state, 'customer_request'), []
+    known = knowledge_hit(db, row, state, text, query, count, action, tool)
+    if known:  # менеджер уже отвечал на такой вопрос и сохранил общий ответ в базу знаний
+        return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
+                + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
