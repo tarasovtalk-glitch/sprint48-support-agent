@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS model_usage (
     input_tokens INTEGER,
     output_tokens INTEGER
 );
+CREATE TABLE IF NOT EXISTS public_demo_requests (
+    id INTEGER PRIMARY KEY,
+    client_hash TEXT NOT NULL,
+    requested_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS public_demo_requests_time ON public_demo_requests(requested_at);
 CREATE TABLE IF NOT EXISTS mail_outbox (
     id TEXT PRIMARY KEY,
     case_id TEXT NOT NULL REFERENCES cases(id),

@@ -1,4 +1,6 @@
 import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -27,6 +29,7 @@ from .store import (
 
 PREFIX = '/support/api'
 DOCUMENT_TTL = 15 * 60
+PUBLIC_DEMO_REQUESTS_PER_MINUTE = 10
 DEMO_SOURCE = Path(__file__).with_name('demo.json')
 
 
@@ -129,6 +132,31 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             raise HTTPException(401, 'Session token required.')
         return row['id']
 
+    def public_demo(x_smf_public_key: str = Header(default=''), x_smf_public_ip: str = Header(default='')) -> bool:
+        if not chat_only or len(demo_key) < 24 or not secrets.compare_digest(demo_key.encode(), x_smf_public_key.encode()):
+            return False
+        try:
+            address = ipaddress.ip_address(x_smf_public_ip)
+        except ValueError as error:
+            raise HTTPException(400, 'Invalid demo request.') from error
+        if isinstance(address, ipaddress.IPv6Address):
+            network = ipaddress.ip_network((address, 64), strict=False)
+            visitor = str(address.ipv4_mapped or network)
+        else:
+            visitor = str(address)
+        identifier = hmac.digest(demo_key.encode(), visitor.encode(), 'sha256').hex()
+        now = int(time.time())
+        with store.connect(write=True) as db:
+            db.execute('DELETE FROM public_demo_requests WHERE requested_at <= ?', (now - 60,))
+            count, oldest = db.execute('''
+                SELECT COUNT(*), MIN(requested_at) FROM public_demo_requests WHERE client_hash=?
+            ''', (identifier,)).fetchone()
+            if count >= PUBLIC_DEMO_REQUESTS_PER_MINUTE:
+                retry_after = str(max(1, oldest + 60 - now))
+                raise HTTPException(429, 'Demo request limit reached.', headers={'Retry-After': retry_after})
+            db.execute('INSERT INTO public_demo_requests(client_hash,requested_at) VALUES (?,?)', (identifier, now))
+        return True
+
     @app.get(PREFIX + '/health', status_code=204)
     def health():
         with store.connect() as db:
@@ -136,8 +164,9 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         return Response(status_code=204)
 
     @app.post(PREFIX + '/sessions', status_code=201)
-    def session(x_demo_key: str = Header(default='')):
-        require_key(demo_key, x_demo_key)
+    def session(x_demo_key: str = Header(default=''), public: bool = Depends(public_demo)):
+        if not public:
+            require_key(demo_key, x_demo_key)
         session_token = secrets.token_urlsafe(32)
         case_id = uuid4().hex
         with store.connect(write=True) as db:
@@ -156,7 +185,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         with store.connect() as db:
             return {'messages': read_chat_messages(db, case_id, after)}
 
-    @app.post(PREFIX + '/case/messages')
+    @app.post(PREFIX + '/case/messages', dependencies=[Depends(public_demo)])
     def message(payload: Message, case_id: str = Depends(client)):
         if chat_only:
             if payload.channel != 'chat':
