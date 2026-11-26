@@ -27,10 +27,10 @@ Python 3.10+, зависимости в `requirements.txt` и шрифт DejaVu 
 | `GET /health` | `204`, если API и база доступны. |
 | `POST /sessions` | Заголовок `X-Demo-Key`. Ответ `session_token` и `case`. |
 | `GET /case` | `Authorization: Bearer <session_token>`. Текущий `state`, `version`, `offer`, `payment_due` и заметка менеджера. |
-| `POST /case/messages` | Авторизация клиента. JSON с `text` или серверным `action` и `value` нажатой кнопки. Ответ `reply`, `intent`, `document_url`, `case`, `messages` и `buttons [{label,action,value}]`. Для веб-чата `channel` отсутствует или равен `chat`. |
+| `POST /case/messages` | Авторизация клиента. JSON с `text` или серверным `action` и `value` нажатой кнопки. Можно передать `page_url` исходной карточки товара Softline. Ответ `reply`, `intent`, `document_url`, `case`, `messages` и `buttons [{label,action,value}]`. Для веб-чата `channel` отсутствует или равен `chat`. |
 | `GET /case/messages` | Авторизация клиента. Восстановление беседы или чтение новых реплик через `?after=<id>`. Ответ `messages [{id,role,text,document_url,buttons,created}]`. |
 | `GET /documents/{access_id}` | PDF. Ссылка действует 15 минут, старый счёт перестаёт открываться при смене состояния. |
-| `GET /manager/cases` | `X-Manager-Key`. Данные очереди, `reason` и `quote` при проверке КП. В `quote` есть позиция, количество, сумма, организация, ИНН и статус НДС. |
+| `GET /manager/cases` | `X-Manager-Key`. По умолчанию очередь ожидающих. Журнал всех разговоров — `?state=all&limit=50&offset=0`. В результате есть `reason` и `quote` при проверке КП. |
 | `GET /manager/cases/{id}/messages` | Авторизация менеджера. Переписка обращения с временем каждой реплики. |
 | `POST /manager/cases/{id}/decision` | Авторизация менеджера. `choice` (`approve` или `reject`), текущая `version`, UUID `request_id` и необязательный `reply` для клиента. `note` поддерживается как прежнее имя. Повтор той же команды возвращает её результат. Устаревшая версия даёт `409`. При подтверждении КП `document_url` также появляется в истории клиента. |
 | `POST /manager/cases/{id}/rule` | Авторизация менеджера, `confirmed: true`. После ручного согласования создаёт правило по этому клиенту и договору. |

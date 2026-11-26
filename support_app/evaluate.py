@@ -12,7 +12,7 @@ from .scenario import load_scenario
 from .store import Store
 
 
-LINE = re.compile(r'^#(\d+)\s+\[([^\]]+)\]\s+(?:\[store\.softline\.ru[^\]]*\]\s*)?(.+)$', re.I)
+LINE = re.compile(r'^#(\d+)\s+\[([^\]]+)\]\s+(?:\[(store\.softline\.ru[^\]]*)\]\s*)?(.+)$', re.I)
 
 
 def input_records(archive: Path):
@@ -29,10 +29,10 @@ def input_records(archive: Path):
                 match = LINE.fullmatch(raw)
                 if match is None:
                     raise ValueError(f'Unexpected record structure in {file.filename}')
-                number, label, text = match.groups()
+                number, label, page, text = match.groups()
                 if number not in seen:
                     seen.add(number)
-                    yield label, text
+                    yield label, text, page or ''
 
 
 def outcome(state, reply, buttons):
@@ -57,13 +57,13 @@ def evaluate(archive: Path, catalog: Path) -> dict:
     by_topic = {}
     with TemporaryDirectory() as temp:
         store = Store(Path(temp) / 'evaluation.sqlite3')
-        for topic, text in input_records(archive):
+        for topic, text, page in input_records(archive):
             state = {}
             case_id = uuid4().hex
             with store.connect(write=True) as db:
                 db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)', (case_id, case_id, json.dumps(fixture)))
                 case = db.execute('SELECT * FROM cases WHERE id=?', (case_id,)).fetchone()
-                reply, buttons = run_turn(db, case, state, catalog, text=text)
+                reply, buttons = run_turn(db, case, state, catalog, text=text, page_url=page)
             result = outcome(state, reply, buttons)
             totals[result] += 1
             by_topic.setdefault(topic, Counter())[result] += 1

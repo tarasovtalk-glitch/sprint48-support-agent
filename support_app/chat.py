@@ -2,6 +2,7 @@ import re
 from contextlib import closing
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .catalog import find_matches, normalize, read_only, view
 from .documents import rubles
@@ -10,6 +11,11 @@ from .store import append_event
 
 
 CRYPTO_WORKSTATION = '410137'
+CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
+REGISTRY_REFERENCES = (
+    ('kaspersky security для почтовых серверов', '203', 'https://reestr.digital.gov.ru/reestr/?EX_PAGE_N=74&EX_PAGE_S=20&PAGE_N=1&PAGE_S=100&SORT_BY=DATE&SORT_TYPE=asc'),
+    ('dr.web curenet', '40', 'https://company.drweb.ru/about_doctorweb/'),
+)
 WORKPLACE_CHOICES = [('Рабочие места', 'placement', 'workstation'), ('Сервер', 'placement', 'server')]
 JOIN_MANAGER = [('Позвать оператора', 'handoff', '')]
 BUTTON_TEXT = {
@@ -33,10 +39,15 @@ INTENT_CUES = {
 
 def intent_cues(text: str) -> str:
     query = normalize(text)
-    if re.search(r'криптопро|mdaemon|защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
+    if CRYPTO_NAME.search(query) or re.search(r'mdaemon|защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
         return ''
     tokens = [w for w in PRODUCT_WORDS.findall(query) if w in INTENT_CUES]
     return ' '.join(tokens[:20]) if len(tokens) >= 2 else ''
+
+
+def chat_price(kopecks: int) -> str:
+    amount = rubles(kopecks).removesuffix(' руб.').removesuffix(',00')
+    return f'{amount} ₽'
 
 
 def buttons(items):
@@ -62,13 +73,26 @@ def lookup(catalog: Path, offer_id: str):
         return {**view(row), 'source_date': date['value'] if date else ''}
 
 
-def resolve_product(catalog: Path, text: str, quantity: int | None):
+def offer_id_from_url(raw: str) -> str | None:
+    try:
+        candidate = urlsplit(raw if '://' in raw else 'https://' + raw)
+    except ValueError:
+        return None
+    if candidate.scheme != 'https' or candidate.netloc.lower() != 'store.softline.ru':
+        return None
+    match = re.search(r'-(\d+)/?$', candidate.path)
+    return match.group(1) if match else None
+
+
+def resolve_product(catalog: Path, text: str, quantity: int | None, page_url: str = ''):
     if not catalog.is_file():
         return []
-    for url in re.findall(r'https?://store\.softline\.ru/[^\s<>\]\)]+', text, re.I):
-        offer_id = re.search(r'-(\d+)(?:/|$|\?)', url)
+    explicit_urls = re.findall(r'https?://store\.softline\.ru/[^\s<>\]\)]+', text, re.I)
+    page_sources = [page_url] if PURCHASE_WORDS.search(normalize(text)) else []
+    for url in [*explicit_urls, *page_sources]:
+        offer_id = offer_id_from_url(url)
         if offer_id:
-            found = lookup(catalog, offer_id.group(1))
+            found = lookup(catalog, offer_id)
             if found:
                 return [found]
     sku_tokens = [t for t in re.findall(r'\b[A-Z][A-Z0-9_.-]{4,29}\b', text) if any(c.isdigit() for c in t)][:3]
@@ -125,7 +149,23 @@ def queue_quote(db, row, state, catalog: Path):
     }
     state['awaiting_customer'] = False
     message = enter_queue(db, row, state, 'quote_review')
-    return f'Сумма по каталогу: {rubles(state["quote"]["amount_kopecks"])} {message}', []
+    return f'Сумма по каталогу: {chat_price(state["quote"]["amount_kopecks"])}. {message}', []
+
+
+def registry_selection(db, req):
+    regular = selection_result(db, req.model_copy(update={'require_registry': False}))
+    matches = []
+    for group in regular['groups']:
+        options = []
+        for offer in group['offers']:
+            public_entry = next(((number, source) for family, number, source in REGISTRY_REFERENCES
+                                 if family in normalize(offer['name'])), None)
+            if offer['registry'] or public_entry:
+                number, source = public_entry or (offer['registry'], '')
+                options.append({**offer, 'registry': number, 'registry_source': source})
+        if options:
+            matches.append({**group, 'offers': options})
+    return matches
 
 
 def collect_selection(state, catalog: Path, registry=False):
@@ -146,11 +186,11 @@ def collect_selection(state, catalog: Path, registry=False):
                     users=state['quantity'], term_months=state['term'], deployment=state['deployment'], require_registry=registry)
     with closing(read_only(catalog)) as db:
         result = selection_result(db, req)
-        if registry and not result['groups'] and state['flow'] == 'needs':
-            alternatives = find_matches(db, ['dr', 'web', 'enterprise'], req.users, req.term_months, active_only=True, new_purchase_only=True)
-            verified = [item for item in alternatives if item['registry']]
-            if verified:
-                result['groups'] = [{'topic': 'Рабочие станции и файлы', 'offers': verified[:2]}]
+        if registry:
+            enriched = {g['topic']: g for g in result['groups']}
+            for group in registry_selection(db, req):
+                enriched.setdefault(group['topic'], group)
+            result['groups'] = list(enriched.values())
     shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
     if not shown:
         return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
@@ -161,13 +201,15 @@ def collect_selection(state, catalog: Path, registry=False):
     if registry:
         lines.append('Номер реестра подтверждает запись из фида. Совместимость с вашими требованиями нужно проверить.')
     for topic, offer in shown:
-        price = rubles(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
-        registry_text = f', реестр № {offer["registry"]}' if registry else ''
-        lines.append(f'{topic}: {offer["name"]} — {price}{registry_text} {offer["url"] or ""}')
+        price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
+        registry_text = f', реестр № {offer["registry"]} {offer.get("registry_source", "")}' if registry else ''
+        lines.append(f'{topic}: {offer["name"]} — {price}{registry_text}. Карточка: {offer["url"] or ""}')
+        if registry and 'curenet' in normalize(offer['name']):
+            lines.append('CureNet проверяет и лечит рабочие станции. Для постоянной защиты нужен отдельный вариант.')
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 
-def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown'):
+def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url=''):
     query = normalize(text)
     count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|рабочих\s+мест|узл|ящик|мест)', query)
     if count:
@@ -195,7 +237,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state['coupon_percent'] = str(percent)
         append_event(db, row['id'], 'demo_coupon_offered', str(percent))
         return f'Оплата по оферте — предоплата. Предлагаю демонстрационный купон на {percent}%. За большей скидкой подключу менеджера.', [('Запросить больше', 'more_discount', ''), *JOIN_MANAGER]
-    if 'криптопро' in query or re.search(r'crypto\s*pro', query):
+    if CRYPTO_NAME.search(query):
         state.update(flow='cryptopro', query=text)
         state.pop('offer_id', None)
         state.pop('offered_ids', None)
@@ -213,11 +255,11 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if not product or not product['available'] or not product['price_kopecks']:
             return enter_queue(db, row, state, 'catalog_unavailable'), []
         state['offer_id'] = product['id']
-        line = f'{product["name"]} — {rubles(product["price_kopecks"])} {product["url"]}'
+        line = f'{product["name"]} — {chat_price(product["price_kopecks"])}. {product["url"]}'
         if state.get('quantity'):
             state['awaiting_customer'] = True
             amount = product['price_kopecks'] * state['quantity']
-            return f'{line}\nНа {state["quantity"]} шт. — {rubles(amount)} Для КП укажите организацию и ИНН.', [('Подготовить КП', 'quote', '')]
+            return f'{line}\nНа {state["quantity"]} шт. — {chat_price(amount)}. Для КП укажите организацию и ИНН.', [('Подготовить КП', 'quote', '')]
         return f'{line}\nСколько рабочих мест?', [('Подготовить КП', 'quote', '')]
     if action == 'select_offer' and value in state.get('offered_ids', []):
         state['offer_id'] = value
@@ -237,7 +279,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if action == 'focus' and value in {'mail', 'all'}:
             state['focus'] = value
         return collect_selection(state, catalog, bool(re.search(r'российск|отечествен|реестр', query)))
-    candidates = resolve_product(catalog, text, state.get('quantity'))
+    candidates = resolve_product(catalog, text, state.get('quantity'), page_url)
     if candidates:
         if len(candidates) == 1 and (not candidates[0]['available'] or candidates[0]['price_kopecks'] is None):
             return enter_queue(db, row, state, 'price_confirmation'), []
@@ -245,7 +287,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state['offered_ids'] = [item['id'] for item in candidates]
         lines = ['Нашёл в каталоге:']
         for item in candidates:
-            price = rubles(item['price_kopecks']) if item['price_kopecks'] is not None else 'по запросу'
+            price = chat_price(item['price_kopecks']) if item['price_kopecks'] is not None else 'по запросу'
             lines.append(f'{item["name"]} — {price} {item["url"] or ""}')
         return '\n'.join(lines), [('Выбрать: ' + item['name'][:45], 'select_offer', item['id']) for item in candidates]
     if intent_hint == 'handoff':

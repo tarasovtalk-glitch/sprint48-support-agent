@@ -35,6 +35,7 @@ class Message(BaseModel):
     action: Literal['price', 'quote', 'invoice', 'deferral', 'placement', 'focus', 'term',
                     'deployment', 'select_offer', 'handoff', 'more_discount'] | None = None
     value: str = Field(default='', max_length=32)
+    page_url: str = Field(default='', max_length=600)
     channel: Literal['chat', 'email', 'call_demo'] = 'chat'
 
     @model_validator(mode='after')
@@ -169,7 +170,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 state = chat_state(db, case_id)
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
                 reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
-                                          text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint)
+                                          text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,
+                                          page_url=payload.page_url)
                 save_chat_state(db, case_id, state)
                 reply_buttons = buttons(choices)
                 agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
@@ -246,13 +248,15 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         })
 
     @app.get(PREFIX + '/manager/cases', dependencies=[Depends(manager)])
-    def queue():
+    def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
+              offset: int = Query(default=0, ge=0)):
         with store.connect() as db:
-            rows = db.execute("SELECT * FROM cases WHERE state='pending' ORDER BY rowid DESC LIMIT 50").fetchall()
+            rows = db.execute("SELECT * FROM cases WHERE (?='all' OR state='pending') ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                              (state, limit, offset)).fetchall()
             cases = []
             for row in rows:
-                state = chat_state(db, row['id'])
-                cases.append({**case_view(row), 'reason': state.get('queue_reason'), 'quote': state.get('quote') if state.get('queue_reason') == 'quote_review' else None})
+                context = chat_state(db, row['id'])
+                cases.append({**case_view(row), 'reason': context.get('queue_reason'), 'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None})
             return {'cases': cases}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/messages', dependencies=[Depends(manager)])
