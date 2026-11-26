@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .catalog import find_matches, normalize, read_only, view
+from .catalog import find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
 from .selection import Selection, selection_result
 from .store import append_event
@@ -15,9 +15,11 @@ CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
 NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
 REGISTRY_REFERENCES = (
-    ('kaspersky security для почтовых серверов', '203', 'https://reestr.digital.gov.ru/reestr/?EX_PAGE_N=74&EX_PAGE_S=20&PAGE_N=1&PAGE_S=100&SORT_BY=DATE&SORT_TYPE=asc'),
-    ('dr.web curenet', '40', 'https://company.drweb.ru/about_doctorweb/'),
+    ('kaspersky security для почтовых серверов базовая лицензия', '203'),
+    ('kaspersky endpoint security для бизнеса стандартный базовая лицензия', '205'),
+    ('kaspersky total security для бизнеса базовая лицензия', '204'),
 )
+REGISTRY_SOURCE = 'https://reestr.digital.gov.ru/reestr/?EX_PAGE_N=12&EX_PAGE_S=100&PAGE_N=304&PAGE_S=100'
 WORKPLACE_CHOICES = [('Рабочие места', 'placement', 'workstation'), ('Сервер', 'placement', 'server')]
 JOIN_MANAGER = [('Позвать оператора', 'handoff', '')]
 QUOTE_CUSTOMER_PROMPT = (
@@ -192,9 +194,13 @@ def queue_quote(db, row, state, catalog: Path):
     product = lookup(catalog, state['offer_id'])
     if not product or not product['available'] or product['price_kopecks'] is None:
         return enter_queue(db, row, state, 'price_confirmation'), []
-    quantity = state['quantity']
+    requested_users = state['quantity']
+    quantity = purchasable_units(product, requested_users)
+    if quantity is None:
+        return 'Количество и цену для выбранной лицензии нужно сверить. ' + enter_queue(db, row, state, 'price_confirmation'), []
     state['quote'] = {
         'offer': product, 'quantity': quantity, 'customer': state['customer'], 'inn': state['inn'], 'kpp': state['kpp'],
+        'requested_users': requested_users,
         'amount_kopecks': product['price_kopecks'] * quantity, 'vat_kopecks': None,
         'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
         'source_date': product['source_date'],
@@ -211,10 +217,10 @@ def registry_selection(db, req):
     for group in regular['groups']:
         options = []
         for offer in group['offers']:
-            public_entry = next(((number, source) for family, number, source in REGISTRY_REFERENCES
+            public_entry = next((number for family, number in REGISTRY_REFERENCES
                                  if family in normalize(offer['name'])), None)
             if offer['registry'] or public_entry:
-                number, source = public_entry or (offer['registry'], '')
+                number, source = (public_entry, REGISTRY_SOURCE) if public_entry else (offer['registry'], '')
                 options.append({**offer, 'registry': number, 'registry_source': source})
         if options:
             matches.append({**group, 'offers': options})
@@ -253,13 +259,13 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     if state['flow'] == 'mdaemon':
         lines.append('Точное название Standard в фиде не подтверждено. Ниже — MDaemon Messaging Server для проверки.')
     if registry:
-        lines.append('Номер реестра подтверждает запись из фида. Совместимость с вашими требованиями нужно проверить.')
+        lines.append('Номера из реестра отечественного ПО. Источник указан рядом, если он известен.')
     for topic, offer in shown:
         price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
         registry_text = f', реестр № {offer["registry"]} {offer.get("registry_source", "")}' if registry else ''
-        lines.append(f'{topic}: {offer["name"]} — {price}{registry_text}. Карточка: {offer["url"] or ""}')
-        if registry and 'curenet' in normalize(offer['name']):
-            lines.append('CureNet проверяет и лечит рабочие станции. Для постоянной защиты нужен отдельный вариант.')
+        units = purchasable_units(offer, state['quantity'])
+        total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
+        lines.append(f'{topic}: {offer["name"]} — {price}{total}{registry_text}. Карточка: {offer["url"] or ""}')
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 

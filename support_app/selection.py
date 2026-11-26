@@ -6,7 +6,10 @@ from typing import Literal
 from fastapi import APIRouter, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from .catalog import EXPANSION_OR_MEDIA, find_matches, normalize, read_only, view
+from .catalog import (
+    EXPANSION_OR_MEDIA, KASPERSKY_ENDPOINT_SKU, KASPERSKY_FAMILIES, KASPERSKY_MAIL_SKU,
+    find_matches, normalize, read_only, tiered_annual_offer, view,
+)
 from .documents import render_catalog_quote
 
 
@@ -22,8 +25,8 @@ QUESTIONS = {
     'task': 'Что нужно сделать или защитить? Например, почту, рабочие станции или файлы.',
 }
 TOPICS = (
-    ('Почта', r'почт|антиспам|mail\b', (('kaspersky', 'почтовых', 'серверов'), ('mail', 'security'), ('антиспам',))),
-    ('Рабочие станции и файлы', r'файл|рабоч.*станц|устройств|антивирус|endpoint', (('endpoint', 'security'), ('dr', 'web', 'enterprise'))),
+    ('Почта', r'почт|антиспам|mail\b', KASPERSKY_MAIL_SKU, (('mail', 'security'), ('антиспам',))),
+    ('Рабочие станции и файлы', r'файл|рабоч.*станц|устройств|антивирус|endpoint', KASPERSKY_ENDPOINT_SKU, (('endpoint', 'security'), ('dr', 'web', 'enterprise'))),
 )
 
 
@@ -86,10 +89,18 @@ def selection_result(db, req: Selection) -> dict:
         if not matched_topics:
             missing.insert(0, 'task')
         if not missing:
-            for title, _, searches in matched_topics:
+            for title, _, family, searches in matched_topics:
                 candidates = []
+                if term == 12 and req.deployment in ('local', 'flexible'):
+                    verified = tiered_annual_offer(db, family, users)
+                    if verified:
+                        candidates.append(verified)
                 for terms in searches:
-                    candidates.extend(find_matches(db, list(terms), users, term, active_only=True, new_purchase_only=True))
+                    candidates.extend(
+                        offer for offer in find_matches(db, list(terms), users, term, active_only=True, new_purchase_only=True)
+                        if not (offer.get('sku') or '').upper().startswith(KASPERSKY_FAMILIES)
+                        and 'curenet' not in normalize(offer['name'])
+                    )
                 offers = shortlist(candidates, users, req.require_registry, distinct_families=True)
                 if offers:
                     result['groups'].append({'topic': title, 'exact_terms_found': None, 'offers': offers})

@@ -30,6 +30,18 @@ DETAIL_FIELDS = ('Версия', 'Срок действия', 'Тип лицен
                  'К-во пользователей от', 'К-во пользователей до')
 LICENSE_UNITS = r'(?:пользовател\w*|сотрудник\w*|устройств\w*|уз(?:ел|л\w*)|рабоч\w*\s+станци\w*|users?|nodes?)'
 EXPANSION_OR_MEDIA = r'продлен|миграц|renewal|upgrade|переход с|докуп|active\s*sync|медиапакет|комплект документации'
+KASPERSKY_MAIL_SKU = 'KL4313RA'
+KASPERSKY_ENDPOINT_SKU = 'KL4863RA'
+KASPERSKY_FAMILIES = (KASPERSKY_MAIL_SKU, KASPERSKY_ENDPOINT_SKU)
+# Ranges are for the annual base licence priced per address or node.
+# https://store.softline.ru/kaspersky/kaspersky-security-dlya-pochtovyih-serverov/
+# https://store.softline.ru/kaspersky/kaspersky-endpoint-security-dlya-biznesa-standartnyiy/
+KASPERSKY_TIERS = (
+    ('K', 10, 14), ('M', 15, 19), ('N', 20, 24), ('P', 25, 49),
+    ('Q', 50, 99), ('R', 100, 149), ('S', 150, 249), ('T', 250, 499),
+    ('U', 500, 999), ('V', 1000, 1499), ('W', 1500, 2499),
+    ('X', 2500, 4999), ('Y', 5000, 9999),
+)
 
 
 def normalize(value: str) -> str:
@@ -142,6 +154,33 @@ def view(row: sqlite3.Row) -> dict:
     item['available'] = bool(item['available'])
     item['parameters'] = json.loads(item['parameters'])
     return item
+
+
+def kaspersky_tier(users: int) -> str | None:
+    return next((suffix for suffix, low, high in KASPERSKY_TIERS if low <= users <= high), None)
+
+
+def tiered_annual_offer(db: sqlite3.Connection, family: str, users: int) -> dict | None:
+    tier = kaspersky_tier(users)
+    if tier is None:
+        return None
+    row = db.execute('''
+        SELECT * FROM products WHERE sku=? AND available=1 AND new_purchase=1 AND price_kopecks IS NOT NULL
+        ORDER BY id LIMIT 1
+    ''', (family + tier + 'FS',)).fetchone()
+    return view(row) if row else None
+
+
+def purchasable_units(offer: dict, requested_users: int) -> int | None:
+    sku = (offer.get('sku') or '').upper()
+    if sku.startswith(KASPERSKY_FAMILIES):
+        tier = kaspersky_tier(requested_users)
+        return requested_users if tier and sku in {family + tier + 'FS' for family in KASPERSKY_FAMILIES} else None
+    if sku in ('PRO32-PSS-NS-1-50', 'PRO32-PSS-CLS-1Y-50-NS-RU'):
+        return 1 if requested_users <= 50 else None
+    if 'на одном рабочем месте' in normalize(offer['name']):
+        return requested_users
+    return 1 if requested_users == 1 and offer.get('min_users') in (None, 1) else None
 
 
 def find_matches(db: sqlite3.Connection, terms: list[str], users: int | None, months: int | None, *, active_only=False, new_purchase_only=False) -> list[dict]:

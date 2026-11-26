@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
+from .catalog import purchasable_units
 from .chat import buttons, customer_text, intent_cues, run_turn, tool_request
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
@@ -324,6 +325,11 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 raise HTTPException(409, 'This request has changed. Reload the case.')
             offer = json.loads(row['offer'])
             approved = decision.choice == 'approve'
+            context = chat_state(db, case_id) if chat_only else {}
+            quote = context.get('quote') if context.get('queue_reason') == 'quote_review' else None
+            if approved and quote and 'requested_users' not in quote:
+                if purchasable_units(quote['offer'], quote['quantity']) != quote['quantity']:
+                    raise HTTPException(409, 'The draft quantity needs review. Reject this draft and start a new quote.')
             state = 'approved' if approved else 'rejected'
             payment_due = due_date(offer) if approved and not chat_only else None
             db.execute('''
@@ -331,8 +337,6 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             ''', (state, payment_due, str(decision.request_id), decision.choice, decision.note, case_id))
             append_event(db, case_id, 'manager_decision', state)
             if chat_only:
-                context = chat_state(db, case_id)
-                quote = context.get('quote') if context.get('queue_reason') == 'quote_review' else None
                 document_url = None
                 if approved and quote:
                     token = secrets.token_urlsafe(32)
