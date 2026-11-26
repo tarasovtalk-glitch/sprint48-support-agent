@@ -14,6 +14,7 @@ CRYPTO_WORKSTATION = '410137'
 CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
 NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
+EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|запросить цену|тендер|госзакупк')
 REGISTRY_REFERENCES = (
     ('kaspersky security для почтовых серверов базовая лицензия', '203'),
     ('kaspersky endpoint security для бизнеса стандартный базовая лицензия', '205'),
@@ -72,7 +73,7 @@ def tool_request(text: str, action: str | None, value: str, state: dict):
     if NEEDS_QUERY.search(query):
         return ('Клиенту нужно ПО для защиты почты или файлов. Срок и размещение ещё не подтверждены. Сначала нужно уточнить требования.',
                 ('clarify_requirements', 'search_catalog'))
-    if action == 'handoff' or re.search(r'позовите оператора|свяжите с менеджером|запросить цену|тендер', query):
+    if action == 'handoff' or (not state.get('awaiting_customer') and EXPLICIT_HANDOFF.search(query)):
         return ('Клиент просит подключить оператора или требует согласования менеджера. Нужна передача оператору.',
                 ('contact_manager', 'clarify_requirements'))
     return None
@@ -276,7 +277,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state['quantity'] = int(count.group(1))
     if tool == 'contact_manager':
         append_event(db, row['id'], 'model_tool_executed', tool)
-        return enter_queue(db, row, state, 'model_routing'), []
+        reason = 'customer_request' if action == 'handoff' or EXPLICIT_HANDOFF.search(query) else 'model_routing'
+        return enter_queue(db, row, state, reason), []
     if action == 'handoff' or re.search(r'(?:позови|подключи|соедини)\w*\s+(?:с\s+)?(?:оператор|менеджер)', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if state.get('awaiting_customer') and text:
