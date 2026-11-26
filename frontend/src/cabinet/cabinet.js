@@ -114,7 +114,20 @@
       v.innerHTML = viewAgent(); after();
     });
   }
-  function after() { renderTop(); restoreDrafts(); }
+  function after() { renderTop(); restoreDrafts(); scrollEdges(); }
+  // «Как шёл разговор» открывается на последних репликах, как чат. Где переписка уходит за край окна,
+  // край мягко гаснет: видно, что дальше есть ещё, а не что строку обрезали
+  function scrollEdges() {
+    [].forEach.call(document.querySelectorAll('.detail__scroll'), function (s) {
+      if (!s._edges) { s._edges = true; s.scrollTop = s.scrollHeight; s.addEventListener('scroll', function () { edge(s); }, { passive: true }); }
+      edge(s);
+    });
+  }
+  function edge(s) {
+    var more = s.scrollHeight - s.clientHeight > 1;
+    s.classList.toggle('is-cut-top', more && s.scrollTop > 1);
+    s.classList.toggle('is-cut-bottom', more && s.scrollTop + s.clientHeight < s.scrollHeight - 1);
+  }
 
   function loadToday() { return load('cases', '/cases', SAMPLE.cases); }
   function cases() { return (store.cases && store.cases.cases) || []; }

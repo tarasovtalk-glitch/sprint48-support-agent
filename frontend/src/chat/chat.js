@@ -125,6 +125,8 @@
   var body = root.querySelector('.slc-body'), input = root.querySelector('input');
   var nameEl = root.querySelector('.slc-head__name'), roleEl = root.querySelector('.slc-head__role');
   var started = false, managerIn = false;
+  var SCREEN = document.body.classList.contains('slc-screen');
+  function hidePanel() { if (!SCREEN) root.classList.remove('is-open'); }
 
   function add(node) { body.appendChild(node); body.scrollTop = body.scrollHeight; return node; }
   function sys(text) { return add(el('<div class="slc-sys">' + esc(text) + '</div>')); }
@@ -634,7 +636,7 @@
   function surveyThanks() {
     var sh = survey.querySelector('.slc-survey__sheet');
     sh.innerHTML = '<p class="slc-survey__thanks">Спасибо за оценку</p>';
-    setTimeout(function () { root.classList.remove('is-open'); setTimeout(surveyHide, 250); }, 1400);
+    setTimeout(function () { hidePanel(); setTimeout(surveyHide, 250); }, 1400);
   }
 
   root.addEventListener('click', function (e) {
@@ -642,8 +644,8 @@
     if (b.classList.contains('slc-launcher')) { root.classList.add('is-open'); start(); setTimeout(function () { input.focus(); }, 200); return; }
     var act = b.getAttribute('data-act');
     var menu = root.querySelector('.slc-menu');
-    if (act === 'close') { root.classList.remove('is-open'); menu.classList.remove('is-open'); }
-    else if (act === 'survey-close') { surveyDone = true; surveyHide(); root.classList.remove('is-open'); }
+    if (act === 'close') { hidePanel(); menu.classList.remove('is-open'); }
+    else if (act === 'survey-close') { surveyDone = true; surveyHide(); hidePanel(); }
     else if (act === 'star') surveyRate(+b.getAttribute('data-n'));
     else if (act === 'survey-send') { if (!rating) return; surveyDone = true; if (LIVE) live.rate(rating); surveyThanks(); }
     else if (act === 'menu') menu.classList.toggle('is-open');
@@ -705,17 +707,7 @@
   }
   window.addEventListener('hashchange', function () { location.reload(); });
 
-  // Ссылки сайта никуда не ведут: на демо страница остаётся на месте
-  document.addEventListener('click', function (e) {
-    var a = e.target.closest('a'); if (a && !a.closest('#sl-chat')) e.preventDefault();
-  }, true);
-  // Плашка про cookie закрывается кнопкой «ОК» и больше не показывается
-  var cookie = document.getElementById('stripe_permission_use_cookie');
-  if (cookie) {
-    var hide = false; try { hide = localStorage.getItem('sl-copy-cookie') === '1'; } catch (err) {}
-    if (hide) cookie.style.display = 'none';
-    cookie.addEventListener('click', function (e) {
-      if (e.target.closest('button, .button, [class*="button"]')) { cookie.style.display = 'none'; try { localStorage.setItem('sl-copy-cookie', '1'); } catch (err) {} }
-    });
-  }
+  // Свой экран чата (index.html, класс slc-screen у body): окно открыто сразу и не прячется после оценки
+  if (SCREEN) { root.classList.add('is-open'); start(); if (matchMedia('(min-width: 761px)').matches) input.focus(); }
+
 })();

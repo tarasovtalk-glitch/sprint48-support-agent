@@ -47,6 +47,14 @@
   var FILE_NAME = 'Коммерческое предложение.pdf';
   var pressable = {}, pressSeq = 0; // id кнопки на экране → {action, value} для сервера
   function bearer(sid) { return { Authorization: 'Bearer ' + sid }; }
+  // карточка товара, с которой клиент открыл чат: /support/?page=<адрес карточки>. Сервер берёт из неё позицию,
+  // когда клиент пишет о покупке. Принимаем только https://store.softline.ru/, не длиннее 600 знаков, как на сервере
+  var STORE_PAGE = /^https:\/\/store\.softline\.ru\//i;
+  var PAGE_URL = (function () {
+    var p = ''; try { p = new URLSearchParams(location.search).get('page') || ''; } catch (e) {}
+    if (!STORE_PAGE.test(p)) p = document.referrer || '';
+    return STORE_PAGE.test(p) && p.length <= 600 ? p : '';
+  })();
 
   // реплика сервера {id, role, text, document_url, buttons, created} → сообщение экрана
   function toMessage(r, keepButtons) {
@@ -77,6 +85,7 @@
   function chatSend(sid, data) {
     var b = data.button_id && pressable[data.button_id];
     var body = b ? { action: b.action, value: b.value } : { text: data.text };
+    if (PAGE_URL) body.page_url = PAGE_URL;
     return raw('POST', '/case/messages', body, bearer(sid)).then(function (r) {
       if (Array.isArray(r.messages)) return { messages: toMessages(r.messages) };
       // сервер без истории сообщений: собираем ответ из reply
@@ -187,11 +196,45 @@
     });
   }
 
-  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем
+  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем. Имени клиента сервер не знает
+  var ACTOR = { client: 'Клиент', manager: 'Менеджер' };
   function events(id) {
     return manager('GET', '/manager/cases/' + encodeURIComponent(id) + '/messages').then(function (r) {
       return { events: (r.messages || []).map(function (m) {
-        return { actor: m.role, text: m.text + (m.document_url ? '\n' + FILE_NAME : ''), time: utc(m.created) };
+        return { actor: m.role, name: ACTOR[m.role], text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : ''), time: utc(m.created) };
+      }) };
+    });
+  }
+
+  // Журнал: все разговоры стенда, новые сверху. Время разговора в списке сервер пока не отдаёт
+  var STATE_SIDE = { open: 'идёт разговор', pending: 'ждёт решения', rejected: 'отказано' };
+  function toJournal(v) {
+    var q = v.quote, why = REASON[v.reason], offer = (q && q.offer) || {};
+    var who = q && q.customer ? q.customer : 'Посетитель сайта';
+    var it = { id: v.id, channel: 'чат', client: who, review: false, open: v.state === 'open' || v.state === 'pending' };
+    // название позиции из фида длинное: в строке и заголовке только клиент и количество, позиция строкой ниже заголовка
+    it.title = q ? who + ': КП' + (q.quantity ? ' на ' + q.quantity + ' шт.' : '') : why ? why.title : 'Разговор с агентом';
+    if (q) { it.client = (offer.name || 'Позиция каталога') + (q.inn ? ' · ИНН ' + q.inn : ''); it.inn = q.inn || ''; }
+    it.meta = (q ? 'Проверка КП' : why ? who : 'Агент отвечал сам') + ' · чат';
+    if (q && q.amount_kopecks != null) it.value_rub = rub(q.amount_kopecks);
+    it.status = v.state === 'approved' ? (q ? 'КП отправлено' : 'ответ отправлен') : STATE_SIDE[v.state] || '';
+    it.badge = v.state === 'pending' ? { tone: 'warning', text: 'Ждёт вашего решения во вкладке «Сегодня»' }
+      : v.state === 'approved' ? { tone: 'success', text: q ? 'КП отправлено клиенту в чат' : 'Ответ отправлен клиенту в чат' }
+      : v.state === 'rejected' ? { tone: 'neutral', text: 'Отказано, клиент получил ответ в чате' }
+      : { tone: 'neutral', text: 'Агент ведёт разговор сам' };
+    if (v.decision_note) it.next = 'Ответ менеджера: ' + v.decision_note;
+    if (v.created || v.updated) it.time = utc(v.updated || v.created);
+    return it;
+  }
+  // кабинет перечитывает журнал при каждом выборе строки: тот же разговор отдаём тем же объектом,
+  // чтобы загруженная переписка не пропадала и не запрашивалась по кругу
+  var jKnown = {};
+  function journalList() {
+    return manager('GET', '/manager/cases?state=all&limit=50&offset=0').then(function (r) {
+      return { items: (r.cases || []).map(function (v) {
+        var was = jKnown[v.id], sig = v.state + ':' + v.version;
+        if (was && was._sig === sig) return was;
+        var it = toJournal(v); it._sig = sig; jKnown[v.id] = it; return it;
       }) };
     });
   }
@@ -228,7 +271,9 @@
     if (method === 'GET' && path === '/cases') return casesList();
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
-    // журнал, справка, статистика и настройки агента: в API их пока нет, экран покажет пример
+    if (method === 'GET' && path === '/journal') return journalList();
+    if (method === 'GET' && (m = /^\/journal\/([^/]+)$/.exec(path))) return events(decodeURIComponent(m[1]));
+    // справка, статистика и настройки агента, проверка разговоров из журнала: в API их пока нет, экран покажет пример
     return Promise.reject(fail(404));
   }
 
