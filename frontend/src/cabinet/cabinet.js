@@ -1,58 +1,76 @@
-/* Кабинет менеджера. Данные берёт с сервера агента (через api.js, контракт в корневом README), без ключей в браузере.
+/* Кабинет менеджера по экранам Figma М1–М7: «Сегодня», «Журнал», «Знания», «Агент» (работа и настройки).
+   Данные берёт с сервера агента через api.js (контракт в корневом README), без ключей в браузере.
    ?demo или DEMO=1 при сборке: всё на примере данных из demo-data.js, действия меняют только эту страницу.
-   Если сервер не отдаёт раздел, вкладка показывает пример и пишет об этом строкой сверху. */
+   В демо можно открыть состояния с макета: ?demo&limit (лимит потрачен), ?demo&paused (пауза), ?demo&empty (очередь пуста).
+   Если сервер не отдаёт раздел, вкладка показывает пример и пишет об этом строкой сверху.
+   Все окна свои: меню, календарь, подсказки, подтверждения и уведомления. Системных alert и select нет. */
 (function () {
   'use strict';
   var CFG = window.SUPPORT_CONFIG || {};
   var DEMO = !!CFG.demo || /[?&]demo\b/.test(location.search);
   var API = String(CFG.apiBase || '/support/api').replace(/\/$/, '');
   var SAMPLE = window.CABINET_DEMO;
+  var VARIANT = DEMO ? (/[?&](limit|paused|empty)\b/.exec(location.search) || [])[1] : null;
 
   /* ---------- мелочи ---------- */
   var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  var MONTHS_1 = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  var WEEKDAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
   function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return [].slice.call((root || document).querySelectorAll(sel)); }
   function copy(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
-  // неразрывные пробелы: короткое слово держится за следующее, ₽ и % за число
+  // неразрывные пробелы: короткое слово держится за следующее, ₽, % и единицы за число
   function ty(s) {
     s = String(s == null ? '' : s);
-    for (var i = 0; i < 2; i++) s = s.replace(/(^|[\s(«])([А-Яа-яЁёA-Za-z0-9№≈]{1,3}) (?=\S)/g, '$1$2 ');
-    return s.replace(/(\d) (?=\d{3}\b)/g, '$1 ').replace(/(\d) (₽|%|мин\b|ч\b)/g, '$1 $2');
+    for (var i = 0; i < 2; i++) s = s.replace(/(^|[\s(«])([а-яёa-z]{1,3}|[А-ЯЁ][а-яё]{0,2}|\d{1,3}|№|≈) (?=\S)/g, '$1$2\u00a0');
+    return s.replace(/(\d) (?=\d{3}\b)/g, '$1\u00a0').replace(/(\d) (₽|%|мин\b|ч\b|с\b|шт\b)/g, '$1\u00a0$2').replace(/ (—|–)/g, '\u00a0$1');
   }
   function t(s) { return esc(ty(s)); }
-  function money(n) { return ty(Math.round(n).toLocaleString('ru-RU').replace(/\s/g, ' ') + ' ₽'); }
-  function rub(n) { return (Math.round(n * 100) / 100).toLocaleString('ru-RU', { minimumFractionDigits: n % 1 ? 2 : 0 }).replace(/\s/g, ' ') + ' ₽'; }
-  function two(n) { return ('0' + n).slice(-2); }
-  function hm(iso) { var d = iso ? new Date(iso) : new Date(); return isNaN(d) ? '' : d.getHours() + ':' + two(d.getMinutes()); }
-  function hhmm(iso) { var d = iso ? new Date(iso) : new Date(); return isNaN(d) ? '' : two(d.getHours()) + ':' + two(d.getMinutes()); }
-  function dayMonth(d) { return d.getDate() + ' ' + MONTHS[d.getMonth()]; }
+  // **жирное** и перенос строки из текстов с макета
+  function rich(s) { return t(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>'); }
+  function group3(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0'); }
+  function money(n) { return group3(Math.round(n)) + '\u00a0₽'; }
+  function rub2(n) { var r = Math.round(n * 100) / 100, k = Math.floor(r); return group3(k) + ',' + ('0' + Math.round((r - k) * 100)).slice(-2) + '\u00a0₽'; }
+  function dec(n, d) { return String((Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d)).replace('.', ','); }
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+  function hmOf(m) { return Math.floor(m / 60) + ':' + two(m % 60); }
+  function mins(x) {
+    if (x == null || x === '') return null;
+    var m = /^(\d{1,2}):(\d{2})$/.exec(x);
+    if (m) return +m[1] * 60 + +m[2];
+    var d = new Date(x); return isNaN(d) ? null : d.getHours() * 60 + d.getMinutes();
+  }
+  function hm(x) { var m = mins(x); return m == null ? '' : hmOf(m); }
   function plural(n, one, few, many) { var a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
-  function lcfirst(s) { s = String(s || ''); return s.charAt(0).toLowerCase() + s.slice(1); }
+  function dur(m) { return m < 60 ? m + '\u00a0мин' : Math.floor(m / 60) + '\u00a0ч' + (m % 60 ? ' ' + (m % 60) + '\u00a0мин' : ''); }
+  function midnight(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
   function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+  function num(v) { var n = Number(String(v).replace(/[^\d.,]/g, '').replace(',', '.')); return isFinite(n) ? n : NaN; }
 
   var IC = {
-    chevron: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6L8 10L12 6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#393446"/></svg>',
-    search: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M14.2 9A5.2 5.2 0 1 1 3.8 9a5.2 5.2 0 0 1 10.4 0Z" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#393446"/><path d="M13 13L16.2 16.2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#393446"/></svg>',
-    file: '<svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M9 4.5H21.5L29 12V33.5H9V4.5Z" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#85828C"/><path d="M21.5 4.5V12H29" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#85828C"/><path d="M13.5 18H24.5M13.5 22H24.5M13.5 26H19" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#85828C"/><circle cx="30" cy="30" r="8" fill="#3E9A10"/><path d="M26.6 30.2L28.9 32.4L33.2 27.8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="white"/></svg>',
-    download: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3.5V12.5M14 8.5L10 12.5L6 8.5M4 16H16" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#393446"/></svg>',
-    pause: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7.5 5V15M12.5 5V15" stroke-width="2" stroke-linecap="round" stroke="#393446"/></svg>',
-    ok: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#3E9A10"/><path d="M4.8 8.2L7 10.4L11.2 5.8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="white"/></svg>',
-    fail: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#A50F2D"/><path d="M5.6 5.6L10.4 10.4M10.4 5.6L5.6 10.4" stroke-width="1.6" stroke-linecap="round" stroke="white"/></svg>'
+    chev: '<svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    search: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M14.2 9A5.2 5.2 0 1 1 3.8 9a5.2 5.2 0 0 1 10.4 0Z" stroke="#67646F" stroke-width="1.6"/><path d="M13 13L16.2 16.2" stroke="#67646F" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.4L6.4 11.2L12.5 4.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    prev: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8L10 12" stroke="#393446" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    next: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4L10 8L6 12" stroke="#393446" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
   };
   var BOT = '<img class="avatar avatar--24 avatar--bot" src="avatar-bot.svg" width="24" height="24" alt="">';
-
-  function badge(tone, text) {
-    var icon = tone === 'success' ? IC.ok : tone === 'danger' ? IC.fail : '';
-    return '<span class="badge badge--' + tone + '">' + icon + t(text) + '</span>';
+  function badge(tone, text) { return '<span class="badge"><span class="dot dot--' + tone + '" aria-hidden="true"></span>' + t(text) + '</span>'; }
+  function counter(n, grey) { return '<span class="counter' + (grey ? ' counter--grey' : '') + '">' + n + '</span>'; }
+  function fact(label, value, dotTone) {
+    return '<div class="fact"><span class="fact__label">' + t(label) + '</span><span class="fact__lead" aria-hidden="true"></span><span class="fact__value">' +
+      (dotTone ? '<span class="badge">' + '<span class="dot dot--' + dotTone + '"></span>' + t(value) + '</span>' : t(value)) + '</span></div>';
   }
-  function counter(n, tone) { return '<span class="counter' + (tone ? ' counter--' + tone : '') + '">' + n + '</span>'; }
-  function panelHead(title, right) { return '<div class="panel__head"><h2 class="t-h2">' + t(title) + '</h2>' + (right || '') + '</div>'; }
-  function personAvatar(name) { return '<span class="avatar avatar--24" aria-hidden="true">' + esc((name || '?').charAt(0)) + '</span>'; }
+  function facts(list, plain) { return '<div class="facts' + (plain ? ' facts--plain' : '') + '">' + list.map(function (f) { return fact(f[0], f[1], f[2] === 'ok' ? 'success' : f[2] === 'fail' ? 'danger' : ''); }).join('') + '</div>'; }
 
+  /* ---------- уведомление внизу слева ---------- */
   var toastTimer = 0;
   function toast(text) {
-    var el = $('#toast'); el.textContent = text; el.classList.add('is-on');
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('is-on'); }, 2600);
+    var el = $('#toast');
+    el.innerHTML = IC.check + '<span>' + t(text) + '</span>';
+    el.classList.add('is-on');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('is-on'); }, 4000);
   }
 
   /* ---------- данные ---------- */
@@ -71,668 +89,991 @@
   // раздел с сервера; нет сервера или раздела, берём пример и помечаем вкладку
   function load(key, path, sample) {
     if (DEMO) { if (store[key] == null) store[key] = copy(sample); return Promise.resolve(store[key]); }
+    if (store[key] != null && store.sample[key]) return Promise.resolve(store[key]);
     return call('GET', path).then(function (d) { store.sample[key] = false; store[key] = d; return d; }, function (e) {
       store.sample[key] = (e && e.status) || true; if (store[key] == null) store[key] = copy(sample); return store[key];
     });
   }
-  function isLocal(key) { return DEMO || store.sample[key]; }
+  function isLocal(key) { return DEMO || !!store.sample[key]; }
   // действие: на сервер, а в примере только на странице
   function act(key, method, path, body, local) {
     if (isLocal(key)) { var r = local ? local() : null; return Promise.resolve(r); }
     return call(method, path, body).then(function (res) { if (local) local(res); return res; }, function (e) {
-      toast('Не получилось сохранить: сервер агента не ответил'); throw e;
+      toast(e && e.status === 409 ? 'Обращение уже изменилось, обновите страницу' : 'Не получилось сохранить: сервер агента не ответил'); throw e;
     });
   }
+  // часы истории: в примере всегда 10:08, как на макете; с сервером настоящее время
+  function storyNow(key) { return isLocal(key) ? SAMPLE.now : hmOf(mins(new Date().toISOString())); }
 
   /* ---------- состояние страницы ---------- */
   var ui = {
-    tab: 'today', open: null, refusing: {}, history: {}, drafts: {}, ruleDone: {}, busy: {},
-    jFilter: 'all', jQuery: '', jSel: null, jAll: false, jPeriod: 'today', jChannel: 'all',
-    agentView: 'work', edit: null, aQuery: '', aAll: false, aOpen: null, gapOpen: null
+    tab: 'today', sub: 'work', sel: null, lastTab: null, lastSel: null,
+    kpClosed: {}, kpEdit: {}, discount: {}, talkAll: {}, drafts: {}, help: {}, typing: {}, busy: {},
+    jDay: midnight(new Date()), jFilter: null, jQuery: '', jOpen: {}, jSel: null,
+    kQuery: '', kOpen: {}, kAll: false, benefit: null
   };
 
   function route() {
     var h = (location.hash || '#today').slice(1).split('/');
     ui.tab = ['today', 'journal', 'knowledge', 'agent'].indexOf(h[0]) >= 0 ? h[0] : 'today';
-    if (ui.tab === 'journal' && h[1]) {
-      if (h[1] === 'review' || h[1] === 'open' || h[1] === 'all') ui.jFilter = h[1]; else ui.jSel = decodeURIComponent(h[1]);
-    }
-    if (ui.tab === 'agent') ui.agentView = h[1] === 'settings' ? 'settings' : 'work';
-    [].forEach.call(document.querySelectorAll('.tab'), function (a) {
+    if (ui.tab === 'agent') ui.sub = h[1] === 'settings' ? 'settings' : 'work';
+    $$('.tab').forEach(function (a) {
       var on = a.getAttribute('data-tab') === ui.tab;
       a.classList.toggle('is-active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
-    render();
+    closePop(true);
+    return render();
   }
 
   function render() {
-    var v = $('#view');
-    if (ui.tab === 'today') return loadToday().then(function () { v.innerHTML = viewToday(); after(); });
-    if (ui.tab === 'journal') return load('journal', '/journal', SAMPLE.journal).then(function () { v.innerHTML = viewJournal(); after(); });
-    if (ui.tab === 'knowledge') return load('knowledge', '/knowledge', SAMPLE.knowledge).then(function () { v.innerHTML = viewKnowledge(); after(); });
-    return Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]).then(function () {
-      v.innerHTML = viewAgent(); after();
+    var v = $('#view'), tab = ui.tab;
+    var ready = tab === 'today' ? loadToday()
+      : tab === 'journal' ? Promise.all([loadToday(), load('journal', '/journal', SAMPLE.journal)])
+      : tab === 'knowledge' ? load('knowledge', '/knowledge', SAMPLE.knowledge)
+      : Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]);
+    return Promise.all([ready, load('settings', '/agent/settings', SAMPLE.settings)]).then(function () {
+      if (tab !== ui.tab) return;
+      var html = tab === 'today' ? viewToday() : tab === 'journal' ? viewJournal() : tab === 'knowledge' ? viewKnowledge() : viewAgent();
+      var fresh = ui.lastTab !== tab + ui.sub;
+      ui.lastTab = tab + ui.sub;
+      v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
+      renderTop(); restoreDrafts(); ensureTalk();
     });
-  }
-  function after() { renderTop(); restoreDrafts(); scrollEdges(); }
-  // «Как шёл разговор» открывается на последних репликах, как чат. Где переписка уходит за край окна,
-  // край мягко гаснет: видно, что дальше есть ещё, а не что строку обрезали
-  function scrollEdges() {
-    [].forEach.call(document.querySelectorAll('.detail__scroll'), function (s) {
-      if (!s._edges) { s._edges = true; s.scrollTop = s.scrollHeight; s.addEventListener('scroll', function () { edge(s); }, { passive: true }); }
-      edge(s);
-    });
-  }
-  function edge(s) {
-    var more = s.scrollHeight - s.clientHeight > 1;
-    s.classList.toggle('is-cut-top', more && s.scrollTop > 1);
-    s.classList.toggle('is-cut-bottom', more && s.scrollTop + s.clientHeight < s.scrollHeight - 1);
   }
 
   function loadToday() { return load('cases', '/cases', SAMPLE.cases); }
   function cases() { return (store.cases && store.cases.cases) || []; }
-  function waiting() { return cases().filter(function (c) { return c.status === 'waiting'; }); }
+  function findCase(id) { return cases().filter(function (c) { return c.id === id; })[0]; }
+  // очередь: ждут решения и разговоры, где менеджер в чате; раньше всех просроченные и с ближним сроком
+  function queue() {
+    return cases().filter(function (c) { return c.status === 'waiting' || c.status === 'in-chat'; }).sort(function (a, b) {
+      return (deadlineMin(a) == null ? 1e9 : deadlineMin(a)) - (deadlineMin(b) == null ? 1e9 : deadlineMin(b));
+    });
+  }
+  function deadlineMin(c) {
+    if (!c.deadline) return null;
+    if (/^\d{1,2}:\d{2}$/.test(c.deadline)) return mins(c.deadline);
+    return (Date.parse(c.deadline) - midnight(new Date()).getTime()) / 60000;
+  }
+  function lateMin(c) {
+    var d = deadlineMin(c); if (d == null) return 0;
+    var now = isLocal('cases') ? mins(SAMPLE.now) : (Date.now() - midnight(new Date()).getTime()) / 60000;
+    return Math.floor(now - d);
+  }
+  function caseBadge(c) {
+    if (c.status === 'in-chat') return badge('accent', 'Вы в чате с клиентом');
+    if (c.status === 'done') return badge(c.done_tone || 'success', c.done_label || 'Готово');
+    if (c.status === 'review') return badge('accent', 'Проверить ответ агента');
+    if (c.status === 'active') return badge('neutral', c.done_label || 'Агент ведёт разговор');
+    if (!c.deadline) return badge('neutral', 'Ждёт решения');
+    var late = lateMin(c);
+    return badge('danger', late > 0 ? 'Просрочено на ' + dur(late) : (c.deadline_label || 'Ответ до') + ' ' + hm(c.deadline));
+  }
+  function status() { return store.status || { state: 'on' }; }
+  function silent() { var s = status().state; return s === 'limit' || s === 'paused' || s === 'down'; }
 
-  /* ---------- шапка холста: счётчик, состояние агента, строка-предупреждение ---------- */
+  /* ---------- шапка: счётчик, состояние агента, строка-предупреждение ---------- */
   function renderTop() {
-    var n = waiting().length, c = $('#todayCounter');
-    if (store.cases) { c.hidden = false; c.textContent = n; c.className = 'counter ' + (n ? 'counter--alert' : 'counter--zero'); }
-    var st = (store.status && store.status.state) || 'on';
-    var b = { on: ['success', 'Агент работает'], paused: ['warning', 'Агент на паузе'], limit: ['danger', 'Лимит потрачен'], down: ['danger', 'Агент не отвечает'] }[st] || ['success', 'Агент работает'];
-    $('#agentBadge').innerHTML = badge(b[0], b[1]);
-    var notes = [];
-    if (st === 'limit') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Лимит на месяц потрачен. Агент молчит до 1-го числа, все чаты идут менеджерам') + '</span><a class="link" href="#agent/settings">Поднять лимит</a></div>');
-    if (st === 'down') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Модель не отвечает. Все чаты идут менеджерам, агент вернётся сам, когда модель заработает') + '</span></div>');
-    var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab];
-    // вместо данных сервера показан пример: это предупреждение, оно красное, как остальные. Текст по причине
-    var why = store.sample[key];
+    var n = queue().length, c = $('#todayCounter');
+    c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
+    var st = status().state, h;
+    // состояние агента сервер пока не отдаёт: с живым API переключатель паузы не показываем, чтобы не обещать того, чего нет
+    if (!DEMO && store.sample.status) h = '';
+    else if (st === 'limit') h = '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '<button class="btn btn--accent" type="button" data-act="limit">Поднять лимит</button></div>';
+    else if (st === 'down') h = '<div class="status status--plain">' + badge('danger', 'Агент не отвечает, чаты ведут менеджеры') + '</div>';
+    else if (st === 'paused') h = '<div class="status status--paused"><span>Агент на паузе</span><button class="switch switch--agent" type="button" role="switch" aria-checked="false" aria-label="Включить агента" data-act="resume"></button></div>';
+    else h = '<div class="status"><span>Агент работает</span><button class="switch switch--agent" type="button" role="switch" aria-checked="true" aria-label="Поставить агента на паузу" data-act="pause"></button></div>';
+    $('#agentStatus').innerHTML = h;
+    var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab], why = store.sample[key], note = '';
+    // вместо данных сервера показан пример: это предупреждение, точка красная. Текст по причине
     if (!DEMO && why) {
-      notes.push('<div class="notice"><span class="notice__text">' + t(why === 401 || why === 403
-        ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
+      note = why === 401 || why === 403 ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
         : why === 503 ? 'На сервере агента не задан ключ менеджера. Пока показан пример, решения из него никуда не уходят'
-        : why === 404 ? 'Сервер агента пока не отдаёт этот раздел, показан пример с макета'
-        : 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят') + '</span></div>');
+        : why === 404 ? 'Сервер агента пока не отдаёт этот раздел, показан пример с макета. Действия здесь меняют только эту страницу'
+        : 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят';
     }
-    $('#notice').innerHTML = notes.join('');
-    $('#notice').style.display = notes.length ? '' : 'none';
+    var el = $('#notice'); el.hidden = !note; el.innerHTML = note ? badge('danger', note) : '';
   }
 
   /* ---------- Сегодня ---------- */
   function viewToday() {
-    var list = cases().slice().sort(function (a, b) {
-      var wa = a.status === 'waiting' ? 0 : 1, wb = b.status === 'waiting' ? 0 : 1;
-      if (wa !== wb) return wa - wb;
-      return wa === 0 ? new Date(a.deadline) - new Date(b.deadline) : new Date(b.decided_at || 0) - new Date(a.decided_at || 0);
-    });
-    var w = waiting();
-    if (ui.open == null && w.length) ui.open = w.slice().sort(function (a, b) { return new Date(a.deadline) - new Date(b.deadline); })[0].id;
-    var main = '<section class="panel">' + panelHead('Ждут решения', counter(w.length, w.length ? 'alert' : 'zero')) + '<div class="panel__list">' +
-      (list.length ? list.map(caseCard).join('') : '<div class="empty"><p class="empty__title">Сейчас решать нечего</p><p class="t-muted">' + t('Новый вопрос появится здесь, а ссылка на него придёт вам в Webim и на почту') + '</p></div>') +
-      '</div></section>';
-    var review = (store.cases && store.cases.review) || [];
-    var today = (store.cases && store.cases.today) || null;
-    var side = '<section class="panel">' + panelHead('На проверку', counter(review.length, review.length ? '' : 'zero')) + '<div class="panel__list">' +
-      (review.length ? review.map(function (r) {
-        return '<a class="row" href="#journal/' + encodeURIComponent(r.id) + '"><span class="row__main"><span class="row__title">' + t(r.title) + '</span><span class="row__meta">' + t(r.meta) + '</span></span></a>';
-      }).join('') : '<p class="panel__note">Проверять нечего: клиенты довольны ответами агента</p>') + '</div></section>';
-    if (today) {
-      side += '<section class="today-agent"><p>' + t('Агент сегодня закрыл сам ' + today.closed + ' из ' + today.total + ' ' + plural(today.total, 'обращения', 'обращений', 'обращений') + (today.spent_rub != null ? ' и потратил на это ' + Math.round(today.spent_rub) + ' ₽' : '')) + '</p><a class="link" href="#agent">Статистика агента</a></section>';
+    var list = queue();
+    if (!list.length) return viewEmpty();
+    if (!ui.sel || !list.some(function (c) { return c.id === ui.sel; })) {
+      var mine = list.filter(function (c) { return !c.owner; });
+      ui.sel = (mine[0] || list[0]).id;
     }
-    return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + side + '</div></div>';
+    var c = findCase(ui.sel), swap = ui.lastSel !== ui.sel; ui.lastSel = ui.sel;
+    var st = status();
+    var head = '<section class="panel" aria-label="Ждут решения"><div class="panel__head"><h2 class="h2">Ждут решения</h2>' + counter(list.length) + '</div>' +
+      (st.state === 'limit' || st.state === 'paused' ? '<p class="panel__note">' + t((st.since ? 'С ' + st.since + ' ' : 'Сейчас ') + 'агент молчит: новые чаты приходят сюда без его сводки.') + '</p>' : '') +
+      '<div class="queue">' + list.map(queueRow).join('') + '</div></section>';
+    return '<div class="today">' + head + '<div class="' + (swap ? 'swap-in' : '') + '" style="min-width:0">' + caseCard(c, 'today') + '</div><div class="side' + (swap ? ' swap-in' : '') + '">' + talkPanel(c, true) + '</div></div>';
+  }
+  function avatar(c, size) {
+    var a = '<span class="avatar' + (size === 24 ? ' avatar--24' : '') + '" aria-hidden="true">' + esc(c.initials || 'К') + '</span>';
+    if (!c.owner) return a;
+    return '<span class="avatar-wrap" aria-hidden="true">' + a + '<span class="avatar avatar--mini">' + esc(c.owner.initials) + '</span></span>';
+  }
+  function queueRow(c) {
+    var f = (c.facts || [['Клиент', c.client]]);
+    return '<button class="qrow' + (c.id === ui.sel ? ' is-selected' : '') + '" type="button" data-act="pick" data-id="' + esc(c.id) + '" aria-pressed="' + (c.id === ui.sel) + '">' +
+      '<span class="qrow__top"><span class="qrow__title">' + t(c.queue_title || c.title) + '</span>' + avatar(c) + '</span>' + caseBadge(c) +
+      '<span class="facts">' + f.map(function (x) { return fact(x[0], x[1]); }).join('').replace(/<div/g, '<span').replace(/<\/div>/g, '</span>') + '</span></button>';
+  }
+  function viewEmpty() {
+    var s = store.settings || {}, rec = (store.cases && store.cases.recent) || [];
+    var how = !(DEMO || !store.sample.settings) ? '' : s.notify !== false && s.channel === 'telegram' ? ', а в Telegram придёт уведомление' : s.notify !== false && s.channel === 'max' ? ', а в MAX придёт уведомление' : '';
+    return '<div class="empty"><div class="empty__head"><p class="empty__title">Решений сейчас нет,<span>агент отвечает клиентам сам</span></p>' +
+      '<p class="empty__sub">' + t('Когда агент передаст разговор, он появится здесь' + how + '.') + '</p><a class="btn btn--grey" href="#journal">Открыть журнал</a></div>' +
+      (rec.length ? '<section class="panel"><h2 class="h2">Последние разговоры агента</h2><div class="glist">' + rec.map(function (r) {
+        return '<div class="lrow" style="margin:0;width:100%;padding:8px 0"><span class="lrow__line"><span class="lrow__title">' + t(r.title) + '</span><span class="lrow__time">' + esc(r.time) + '</span></span>' +
+          '<span class="lrow__line"><span class="lrow__status"><span class="dot dot--success"></span>' + t(r.status) + '</span><span class="lrow__client">' + t(r.client) + '</span></span></div>';
+      }).join('') + '</div></section>' : '') + '</div>';
   }
 
-  function deadlineBadge(c) {
-    if (!c.deadline) return ''; // срока ответа сервер может не прислать
-    if (!DEMO && new Date(c.deadline) < new Date()) return badge('warning', 'Срок вышел в ' + hm(c.deadline));
-    return badge('warning', 'Ответ до ' + hm(c.deadline));
-  }
-  function titleRow(c) {
-    return '<div class="case__title-row"><p class="case__title">' + t(c.title) + '</p>' + (c.amount_rub != null ? '<p class="case__value">' + money(c.amount_rub) + '</p>' : '') + '</div>';
-  }
-  function historyLink(c) { return '<button class="link" type="button" data-act="history" data-id="' + esc(c.id) + '" aria-expanded="' + !!ui.history[c.id] + '">Как шёл разговор</button>'; }
-  function historyBlock(c) {
-    if (!ui.history[c.id]) return '';
-    if (!c.events) return '<div class="case__history"><p class="t-muted">Загружаю переписку…</p></div>';
-    return '<div class="case__history">' + eventsHtml(c.events) + '</div>';
-  }
-  function draft(c) { return ui.drafts[c.id] || (ui.drafts[c.id] = {}); }
+  /* карточка случая: та же в «Сегодня» и в «Журнале» */
+  function caseCard(c, mode) {
+    if (!c) return '<section class="case"><p class="muted">Выберите разговор слева</p></section>';
+    var id = esc(c.id), inChat = c.status === 'in-chat', price = kpTotal(c);
+    var h = '<section class="case" aria-label="' + esc(c.title) + '"><div class="case__top' + (price == null || inChat ? ' case__top--short' : '') + '">' + caseBadge(c) +
+      (price != null && !inChat ? '<span class="num" id="price-' + id + '">' + money(price) + '</span>' : '') + '</div>';
+    h += '<div class="case__intro"><div class="case__about"><h2 class="h2">' + t(c.title) + '</h2>' +
+      (c.first ? '<p class="bubble" title="' + esc(c.first) + '"><span>' + t(c.first) + '</span></p>' : '') + '</div>' + stepsHtml(c) + '</div>';
 
-  function caseCard(c) {
-    var id = esc(c.id), busy = ui.busy[c.id] ? ' is-busy' : '';
-    // решённый случай
-    if (c.status !== 'waiting') {
-      var by = c.decided_by && c.decided_by !== 'Вы' && c.decided_by !== 'me' ? c.decided_by + ' в ' : 'в ';
-      var b = c.status === 'approved' ? badge('success', 'Согласовано') : c.status === 'answered' ? badge('success', 'Ответ отправлен') : badge('neutral', 'Отказано');
-      var h = '<article class="case' + busy + '" data-id="' + id + '"><div class="case__head"><div class="case__top">' + b +
-        '<span class="case__meta">' + t(by + hm(c.decided_at)) + '</span><span class="case__top-right">' + historyLink(c) + '</span></div>' +
-        titleRow(c) + '<p class="case__desc">' + t(c.result || '') + '</p></div>';
-      if (c.status === 'approved' && c.rule && !ui.ruleDone[c.id]) h += ruleBlock(c);
-      return h + historyBlock(c) + '</article>';
+    if (mode === 'journal' && (c.status === 'waiting' || c.status === 'in-chat')) {
+      h += '<p class="effect">' + rich(c.owner ? c.effect : 'Решение ждёт во вкладке «Сегодня»: там ответ клиенту и все действия.') + '</p>' +
+        (c.owner ? '' : '<div class="case__buttons"><button class="btn btn--grey" type="button" data-act="goto-today" data-id="' + id + '">Открыть в «Сегодня»</button></div>');
+      return h + '</section>';
     }
-    var open = ui.open === c.id;
-    if (!open) {
-      var desc = c.kind === 'answer' || !c.advice ? c.desc : 'Совет агента: ' + lcfirst(c.advice);
-      return '<article class="case is-collapsed' + busy + '" data-act="open" data-id="' + id + '" tabindex="0" role="button" aria-expanded="false"><div class="case__head"><div class="case__top">' + deadlineBadge(c) +
-        '<span class="case__top-right"><span class="case__toggle">' + IC.chevron + '</span></span></div>' + titleRow(c) + '<p class="case__desc">' + t(desc) + '</p></div></article>';
+    if (c.owner) return h + '<p class="effect">' + rich(c.effect) + '</p></section>';
+
+    if (c.kind === 'quote' && c.status === 'waiting') {
+      var edit = ui.kpEdit[c.id], open = !ui.kpClosed[c.id] || edit;
+      var canEdit = isLocal('cases') || c.can_discount;
+      h += '<p class="effect">' + rich(edit ? 'Поменять можно только скидку. **Итог и НДС пересчитаются**, клиент получит уже исправленное КП.' : silent() && c.effect_silent ? c.effect_silent : c.effect) + '</p>';
+      h += '<div class="case__actions"><div class="case__buttons"><button class="btn btn--accent' + (ui.busy[c.id] ? ' is-busy' : '') + '" type="button" data-act="send-kp" data-id="' + id + '">' + (ui.busy[c.id] ? 'Отправляю…' : 'Отправить КП в чат') + '</button>' +
+        (canEdit ? (edit ? '<button class="btn btn--grey" type="button" data-act="cancel-edit" data-id="' + id + '">Отменить правку</button>' : '<button class="btn btn--grey" type="button" data-act="edit-kp" data-id="' + id + '">Поправить</button>') : '') + '</div>' +
+        (edit || !c.kp ? '' : collapseBtn(c, open)) + '</div>';
+      if (open && c.kp) h += '<hr class="dash">' + kpHtml(c, edit);
+      return h + '</section>';
     }
-    var head = '<div class="case__head"><div class="case__top">' + deadlineBadge(c) + '<span class="case__top-right">' + historyLink(c) +
-      '<button class="case__toggle" type="button" data-act="collapse" data-id="' + id + '" aria-label="Свернуть">' + IC.chevron + '</button></span></div>' + titleRow(c);
-    var body;
-    if (c.kind === 'answer') body = answerBlock(c);
-    else if (ui.refusing[c.id]) body = refuseBlock(c);
-    else body = adviceBlock(c);
-    var descText = ui.refusing[c.id] ? 'Совет агента: ' + (c.recommend === 'refuse' ? 'отказать' : 'согласовать') : c.desc;
-    return '<article class="case is-open' + busy + '" data-id="' + id + '">' + head + '<p class="case__desc">' + t(descText) + '</p></div>' + body + historyBlock(c) + '</article>';
+    if (c.kind !== 'quote' && c.status === 'waiting') {
+      var d = draft(c);
+      h += '<hr class="dash"><div class="reply"><label class="label"><span class="label__text medium">Ответ для клиента</span>' +
+        '<textarea class="field" rows="2" data-draft="reply" data-id="' + id + '" placeholder="Что ответить клиенту">' + esc(d.reply) + '</textarea></label>' +
+        (c.help_option ? '<label class="check"><button class="switch" type="button" role="switch" aria-checked="' + (d.help !== false) + '" data-act="help" data-id="' + id + '" aria-label="Добавить ответ в справку"></button>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' : '') + '</div>';
+      h += '<p class="effect">' + rich(c.effect) + '</p><div class="case__buttons"><button class="btn btn--accent' + (ui.busy[c.id] ? ' is-busy' : '') + '" type="button" data-act="answer" data-id="' + id + '" data-needs="reply"' + (String(d.reply || '').trim() ? '' : ' disabled') + '>' + (ui.busy[c.id] ? 'Отправляю…' : 'Ответить клиенту') + '</button></div>';
+      return h + '</section>';
+    }
+    if (inChat) {
+      return h + '<hr class="dash"><p class="effect">' + rich(c.in_chat && c.in_chat.effect || 'Агент молчит, пока вы в чате. **Верните ему разговор**, когда вопрос решён.') + '</p>' +
+        '<div class="case__buttons"><button class="btn btn--accent" type="button" data-act="return" data-id="' + id + '">Вернуть агенту</button></div></section>';
+    }
+    if (c.status === 'review') {
+      var r = ui.drafts['fix-' + c.id] || (ui.drafts['fix-' + c.id] = { fix: '' });
+      return h + '<p class="effect">' + rich(c.effect) + '</p><hr class="dash"><div class="reply"><label class="label"><span class="label__text medium">Как надо было ответить</span>' +
+        '<textarea class="field" rows="2" data-draft="fix" data-id="fix-' + id + '" placeholder="Например: редакцию из запроса клиента не менять">' + esc(r.fix) + '</textarea></label></div>' +
+        '<div class="case__buttons"><button class="btn btn--accent" type="button" data-act="jfix" data-id="' + id + '" data-needs="fix"' + (r.fix.trim() ? '' : ' disabled') + '>Сохранить поправку</button>' +
+        '<button class="btn btn--grey" type="button" data-act="jok" data-id="' + id + '">Агент ответил верно</button></div></section>';
+    }
+    // закрытый разговор
+    var kpOpen = c.kp && !ui.kpClosed[c.id];
+    h += '<div class="case__actions"><p class="effect">' + rich(c.effect || '') + '</p>' + (c.kp ? collapseBtn(c, kpOpen) : '') + '</div>';
+    if (kpOpen) h += '<hr class="dash">' + kpHtml(c, false);
+    return h + '</section>';
   }
-
-  function adviceBlock(c) {
-    var approve = '<button class="btn ' + (c.recommend === 'refuse' ? 'btn--secondary' : 'btn--primary') + '" type="button" data-act="approve" data-id="' + esc(c.id) + '">' + t(c.approve_label || 'Согласовать') + '</button>';
-    var refuse = '<button class="btn ' + (c.recommend === 'refuse' ? 'btn--primary' : 'btn--secondary') + '" type="button" data-act="refuse" data-id="' + esc(c.id) + '">Отказать</button>';
-    return '<div class="case__block">' + (c.advice ? '<div class="case__advice-head">' + BOT + 'Совет агента</div><p>' + t(c.advice) + '</p>' : '') +
-      (c.effect ? '<div class="case__effect"><p class="case__effect-title">' + (c.recommend === 'refuse' ? 'Если согласовать, агент' : 'Что сделает агент') + '</p><p>' + t(c.effect) + '</p></div>' : '') +
-      '<div class="case__buttons">' + (c.recommend === 'refuse' ? refuse + approve : approve + refuse) + '</div></div>';
+  function collapseBtn(c, open) {
+    return '<button class="pill' + (open ? ' is-up' : '') + '" type="button" data-act="kp-toggle" data-id="' + esc(c.id) + '" aria-expanded="' + open + '">' + (open ? 'Свернуть КП' : 'Показать КП') + IC.chev + '</button>';
   }
-
-  function refuseBlock(c) {
-    var d = draft(c), reasons = (c.refuse_reasons || []).concat(['Другая причина']);
-    if (d.reason == null) d.reason = reasons[0];
-    if (d.reply == null) d.reply = replyFor(c, d.reason);
-    return '<div class="case__block"><p class="case__block-title" id="reasons-' + esc(c.id) + '">Причина отказа</p><div class="radios" role="radiogroup" aria-labelledby="reasons-' + esc(c.id) + '">' +
-      reasons.map(function (r) {
-        return '<label class="radio"><input type="radio" name="reason-' + esc(c.id) + '" value="' + esc(r) + '" data-draft="reason" data-id="' + esc(c.id) + '"' + (d.reason === r ? ' checked' : '') + '>' + t(r) + '</label>';
-      }).join('') + '</div>' +
-      '<label class="case__effect"><span class="case__block-title">' + t('Что агент ответит клиенту, текст можно поправить') + '</span><textarea class="textarea" rows="3" data-draft="reply" data-id="' + esc(c.id) + '">' + esc(d.reply) + '</textarea></label>' +
-      '<div class="case__buttons"><button class="btn btn--primary" type="button" data-act="refuse-send" data-id="' + esc(c.id) + '">Отказать и ответить клиенту</button>' +
-      '<button class="btn btn--secondary" type="button" data-act="refuse-back" data-id="' + esc(c.id) + '">Назад</button></div></div>';
+  function stepsHtml(c) {
+    if (c.steps == null) return isLocal('cases') ? '' : '<div class="path"><p class="medium">Что сделал агент</p><p class="muted">Загружаю шаги…</p></div>';
+    if (!c.steps.length) return '';
+    var title = c.status === 'in-chat' ? 'Что сделано' : 'Что сделал агент';
+    return '<div class="path"><p class="medium">' + title + '</p><ol class="path__list" style="margin:0;padding:0;list-style:none">' + c.steps.map(function (s) {
+      return '<li class="step"><span class="step__time">' + esc(s[0]) + '</span><span class="step__node" aria-hidden="true"></span><span>' + t(s[1]) + '</span></li>';
+    }).join('') + '</ol></div>';
   }
-  function replyFor(c, reason) { return (c.refuse_replies && c.refuse_replies[reason]) || (reason === 'Другая причина' ? '' : c.refuse_reply || ''); }
-
-  function answerBlock(c) {
-    var d = draft(c);
+  function draft(c) {
+    var d = ui.drafts[c.id] || (ui.drafts[c.id] = {});
     if (d.reply == null) d.reply = c.reply_draft || '';
-    if (d.help == null) d.help = c.help_option !== false; // переключатель «в справку» только там, где сервер это умеет
-    return '<div class="case__block"><div class="case__advice-head">' + BOT + 'Сводка агента</div><p>' + t(c.advice) + '</p>' +
-      '<label class="case__effect"><span class="case__block-title">Ответ для клиента</span><textarea class="textarea" rows="2" data-draft="reply" data-id="' + esc(c.id) + '" placeholder="Что передать клиенту">' + esc(d.reply) + '</textarea></label>' +
-      (c.help_option === false ? '' : '<label class="switch"><input type="checkbox" data-draft="help" data-id="' + esc(c.id) + '"' + (d.help ? ' checked' : '') + '>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>') +
-      (c.effect ? '<div class="case__effect"><p class="case__effect-title">Что сделает агент</p><p>' + t(c.effect) + '</p></div>' : '') +
-      '<div class="case__buttons"><button class="btn btn--primary" type="button" data-act="answer" data-id="' + esc(c.id) + '"' + (d.reply.trim() ? '' : ' disabled') + '>Ответить клиенту</button></div></div>';
+    return d;
   }
 
-  function ruleBlock(c) {
-    var d = draft(c); d.rule = d.rule || copy(c.rule.params || {});
-    var parts = (c.rule.text || []).map(function (p) {
-      var m = /^\{(\w+)\}$/.exec(p);
-      if (!m) return '<span>' + t(p) + '</span>';
-      var v = d.rule[m[1]];
-      var w = String(v == null ? '' : v.toLocaleString ? v.toLocaleString('ru-RU') : v).length;
-      return '<input class="input" inputmode="numeric" size="' + Math.max(2, w) + '" style="width:' + (Math.max(2, w) * 9 + 22) + 'px" aria-label="Число в правиле" data-draft="rule" data-key="' + m[1] + '" data-id="' + esc(c.id) + '" value="' + esc(v == null ? '' : Number(v).toLocaleString('ru-RU').replace(/\s/g, ' ')) + '">';
+  /* КП: позиции, скидка, итог и НДС считаются из позиций, чтобы цифры не расходились */
+  function kpSum(c) { return (c.kp && c.kp.items || []).reduce(function (s, i) { return s + (i.qty || 1) * i.price; }, 0); }
+  function kpDiscount(c) { return ui.kpEdit[c.id] ? (ui.discount[c.id] || 0) : (c.kp && c.kp.discount) || 0; }
+  function kpTotal(c) {
+    if (!c.kp) return c.amount_rub != null ? c.amount_rub : null;
+    return Math.round(kpSum(c) * (1 - kpDiscount(c) / 100) * 100) / 100;
+  }
+  function kpHtml(c, edit) {
+    var k = c.kp, total = kpTotal(c), vat = k.vat_rate === 0 ? null : (k.vat_rate || 22);
+    var h = '<div class="kp-wrap"><div class="kp"><div class="kp__head"><p class="medium">' + t('Коммерческое предложение' + (k.number ? ' № ' + k.number : '')) + '</p>' +
+      '<p class="muted">' + t('ПАО «Софтлайн» для ' + k.buyer) + '</p></div>';
+    h += k.items.map(function (i) {
+      return '<div class="kp__item"><div class="kp__row"><span class="medium">' + t(i.name) + '</span><span class="fact__lead" aria-hidden="true"></span><span>' + t((i.qty || 1) + ' × ' + rub2(i.price)) + '</span></div>' +
+        (i.note ? '<p class="muted">' + t(i.note) + '</p>' : '') + '</div>';
     }).join('');
-    return '<div class="case__block"><p class="case__block-title">Сделать правилом?</p><div class="case__rule">' + parts + '</div>' +
-      '<p class="t-muted">' + t('Такие просьбы агент будет согласовывать сам и записывать в журнал. Числа можно изменить') + '</p>' +
-      '<div class="case__buttons case__buttons--rule"><button class="btn btn--secondary" type="button" data-act="rule" data-id="' + esc(c.id) + '">Сделать правилом</button>' +
-      '<button class="link" type="button" data-act="rule-later" data-id="' + esc(c.id) + '">Не сейчас</button></div></div>';
-  }
-
-  function eventsHtml(list) {
-    return '<div class="events">' + (list || []).map(function (e) {
-      var who = e.actor === 'agent' ? BOT + '<span class="event__name">Агент</span>' : personAvatar(e.name) + '<span class="event__name">' + t(e.name || (e.actor === 'manager' ? 'Менеджер' : 'Клиент')) + '</span>';
-      return '<div class="event"><div class="event__head">' + who + '<span class="event__time">' + hhmm(e.time) + '</span></div><p>' + t(e.text) + '</p>' +
-        (e.source ? '<p class="event__source">' + t(e.source) + '</p>' : '') + (e.steps ? '<p class="event__steps">' + t(e.steps) + '</p>' : '') + '</div>';
-    }).join('') + '</div>';
-  }
-
-  function findCase(id) { return cases().filter(function (c) { return c.id === id; })[0]; }
-  function replaceCase(updated) {
-    var list = cases();
-    for (var i = 0; i < list.length; i++) if (list[i].id === updated.id) { var keep = list[i].events; list[i] = updated; if (!updated.events && keep) updated.events = keep; }
-  }
-  function decide(c, body, local) {
-    ui.busy[c.id] = true; render();
-    return act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/decision', body, function (res) {
-      if (res && res.id) replaceCase(res); else local();
-    }).then(function () {
-      delete ui.busy[c.id]; delete ui.refusing[c.id];
-      var next = waiting()[0]; ui.open = next ? next.id : null;
-      render();
-    }, function () { delete ui.busy[c.id]; render(); });
-  }
-
-  /* ---------- Журнал ---------- */
-  function jItems() { return (store.journal && store.journal.items) || []; }
-  function jTime(it) {
-    if (it.time) return new Date(it.time);
-    var m = /(\d{1,2}):(\d{2})\s*$/.exec(it.meta || ''); var d = new Date();
-    if (m) d.setHours(+m[1], +m[2], 0, 0); return d;
-  }
-  function jChannel(it) { if (it.channel) return it.channel; var m = / · (чат|почта|звонок) · /.exec(it.meta || ''); return m ? m[1] : ''; }
-  function jScope(list) {
-    var now = new Date(), y = new Date(); y.setDate(y.getDate() - 1);
-    var wk = new Date(); wk.setDate(wk.getDate() - 7);
-    return list.filter(function (it) {
-      var d = jTime(it);
-      if (ui.jPeriod === 'today' && !sameDay(d, now)) return false;
-      if (ui.jPeriod === 'yesterday' && !sameDay(d, y)) return false;
-      if (ui.jPeriod === 'week' && d < wk) return false;
-      if (ui.jChannel !== 'all' && jChannel(it) !== ui.jChannel) return false;
-      return true;
-    });
-  }
-  function viewJournal() {
-    var scoped = jScope(jItems());
-    var counts = { all: scoped.length, open: scoped.filter(function (i) { return i.open; }).length, review: scoped.filter(function (i) { return i.review; }).length };
-    var q = ui.jQuery.trim().toLowerCase();
-    var list = scoped.filter(function (it) {
-      if (ui.jFilter === 'open' && !it.open) return false;
-      if (ui.jFilter === 'review' && !it.review) return false;
-      return !q || (it.title + ' ' + it.meta + ' ' + (it.client || '') + ' ' + (it.inn || '') + ' ' + (it.first || '')).toLowerCase().indexOf(q) >= 0;
-    });
-    var PAGE = 6, shown = ui.jAll ? list : list.slice(0, PAGE);
-    if (!ui.jSel || !list.some(function (i) { return i.id === ui.jSel; })) ui.jSel = list.length ? list[0].id : null;
-    var chip = function (key, label) { return '<button class="chip' + (ui.jFilter === key ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="' + key + '" aria-pressed="' + (ui.jFilter === key) + '">' + label + counter(counts[key]) + '</button>'; };
-    var today = new Date();
-    var sel = function (name, val, opts) {
-      return '<label class="select"><span class="sr">' + name + '</span><select data-act="jscope" data-key="' + name + '">' + opts.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === val ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>' + IC.chevron + '</label>';
-    };
-    var main = '<section class="panel">' + panelHead('Журнал') +
-      '<div class="journal__tools"><div class="chips">' + chip('all', 'Все') + chip('open', 'Не закрыты') + chip('review', 'Проверить') + '</div>' +
-      '<label class="field">' + IC.search + '<input type="search" data-act="jsearch" placeholder="Клиент, ИНН или № заказа" aria-label="Поиск по журналу" value="' + esc(ui.jQuery) + '"></label></div>' +
-      '<div class="journal__scope">' + sel('period', ui.jPeriod, [['today', 'Сегодня, ' + dayMonth(today)], ['yesterday', 'Вчера'], ['week', 'За неделю'], ['all', 'Всё время']]) +
-      sel('channel', ui.jChannel, [['all', 'Все каналы'], ['чат', 'Чат'], ['почта', 'Почта'], ['звонок', 'Звонки']]) + '</div>' +
-      '<div class="panel__list">' + (shown.length ? shown.map(jRow).join('') : '<p class="panel__note">' + (q ? 'Ничего не нашлось. Попробуйте название компании, ИНН или номер заказа' : ui.jFilter === 'review' ? 'Проверять нечего' : 'Разговоров за этот период нет') + '</p>') + '</div>' +
-      (ui.jFilter === 'review' && list.length ? '<p class="panel__note">Разговор уйдёт из списка после вашей проверки</p>'
-        : list.length > shown.length ? '<button class="link" type="button" data-act="jmore">Показать ещё ' + (list.length - shown.length) + '</button>' : '') +
-      '</section>';
-    var it = jItems().filter(function (i) { return i.id === ui.jSel; })[0];
-    return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + (it ? jDetail(it) : '') + '</div></div>';
-  }
-  function jRow(it) {
-    var side = '';
-    if (it.deadline && it.open) side = '<span class="row__side row__side--alert">' + (it.value_rub != null ? '<span class="row__value">' + money(it.value_rub) + '</span>' : '') + badge('warning', 'Ответ до ' + hm(it.deadline)) + '</span>';
-    else if (it.value_rub != null) side = '<span class="row__side"><span class="row__value">' + money(it.value_rub) + '</span>' + (it.status ? '<span class="row__status">' + t(it.status) + '</span>' : '') + '</span>';
-    else if (it.status) side = '<span class="row__side"><span class="row__status">' + t(it.status) + '</span></span>';
-    return '<button class="row' + (it.id === ui.jSel ? ' is-selected' : '') + '" type="button" data-act="jselect" data-id="' + esc(it.id) + '" aria-pressed="' + (it.id === ui.jSel) + '"><span class="row__main"><span class="row__title">' + t(it.title) + '</span><span class="row__meta">' + t(it.meta) + '</span></span>' + side + '</button>';
-  }
-  function jDetail(it) {
-    if (!DEMO && !store.sample.journal && !it.events && !it._loading) {
-      it._loading = true;
-      call('GET', '/journal/' + encodeURIComponent(it.id)).then(function (d) { Object.assign(it, d); it._loading = false; if (ui.tab === 'journal') render(); }, function () { it._loading = false; it.events = []; });
+    if (edit) {
+      h += '<div class="kp__discount"><label class="muted" for="disc-' + esc(c.id) + '" style="flex:1">Скидка</label><input class="field field--num" id="disc-' + esc(c.id) + '" inputmode="decimal" autocomplete="off" data-act="discount" data-id="' + esc(c.id) + '" value="' + esc(String(ui.discount[c.id] || 0).replace('.', ',')) + '"><span class="muted">%</span></div>';
+    } else if (kpDiscount(c)) {
+      h += '<div class="kp__row"><span class="muted">Скидка</span><span class="fact__lead"></span><span>' + t(String(kpDiscount(c)).replace('.', ',') + '%') + '</span></div>';
     }
-    var reviewing = it.review;
-    var h = '<section class="detail"><div class="detail__head"><h2 class="t-h2">' + t(it.detail_title || it.title) + '</h2><p class="t-muted">' + t(it.client || '') + '</p></div>';
-    h += '<div class="detail__now">' + (it.badge ? badge(it.badge.tone || 'neutral', it.badge.text) : '') + (it.next ? '<p class="t-muted">' + t(it.next) + '</p>' : '') +
-      (it.file ? '<a class="file-row"' + (it.file.url ? ' href="' + esc(it.file.url) + '" target="_blank" rel="noopener"' : '') + '>' + IC.file + '<span class="file-row__text"><span class="file-row__name">' + t(it.file.name) + '</span><span class="file-row__note">' + t(it.file.note || '') + '</span></span>' + (it.file.url ? IC.download : '') + '</a>' : '') +
-      (it.sent ? '<p class="t-muted">' + t(it.sent) + '</p>' : '') + '</div>';
-    h += '<div class="detail__history"><p class="t-title">Как шёл разговор</p><div class="detail__scroll' + (reviewing ? ' detail__scroll--all' : '') + '" tabindex="0" aria-label="Переписка">' +
-      (it.events ? eventsHtml(it.events) : '<p class="t-muted">Загружаю переписку…</p>') + '</div></div>';
-    if (reviewing) {
-      var d = ui.drafts['j-' + it.id] || (ui.drafts['j-' + it.id] = { fix: '' });
-      h += '<div class="detail__review"><label class="case__effect"><span class="case__block-title">Как надо было ответить</span><textarea class="textarea" rows="2" data-draft="fix" data-id="j-' + esc(it.id) + '" placeholder="Например: клиент уже назвал срок лицензии, не переспрашивать">' + esc(d.fix) + '</textarea></label>' +
-        '<p class="t-muted">' + t('Агент запомнит поправку, она появится в «Знаниях»') + '</p><div class="detail__actions">' +
-        '<button class="btn btn--primary" type="button" data-act="jfix" data-id="' + esc(it.id) + '"' + (d.fix.trim() ? '' : ' disabled') + '>Сохранить поправку</button>' +
-        '<button class="link" type="button" data-act="jok" data-id="' + esc(it.id) + '">Агент ответил верно</button></div></div>';
-    }
-    // расход модели по журналу обращения: число вызовов и рубли с НДС, мелкие суммы до десятитысячных
-    if (it.model_calls != null) {
-      var spent = it.model_calls ? it.model_calls + ' ' + plural(it.model_calls, 'вызов', 'вызова', 'вызовов') + ', ' +
-        (Math.round(it.model_cost_rub * 10000) / 10000).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ' ₽ с НДС'
-        : 'не вызывалась, ответы по правилам и каталогу';
-      h += '<div class="detail__cost"><span class="fact"><span class="fact__label">Модель</span><span class="fact__value">' + t(spent) + '</span></span></div>';
-    } else if (it.cost_rub != null || it.manager_min != null) {
-      h += '<div class="detail__cost">' + (it.cost_rub != null ? '<span class="fact"><span class="fact__label">Работа агента</span><span class="fact__value">' + rub(it.cost_rub) + '</span></span>' : '') +
-        (it.manager_min != null ? '<span class="fact"><span class="fact__label">Время менеджера</span><span class="fact__value">' + it.manager_min + ' мин</span></span>' : '') + '</div>';
+    h += '<div class="kp__total"><div class="kp__row"><span>Итого</span><span class="fact__lead" aria-hidden="true"></span><span class="fact__value" data-kp="total">' + t(rub2(total)) + '</span></div>' +
+      (vat ? '<div class="kp__row muted"><span>' + t('в т. ч. НДС ' + vat + '%') + '</span><span class="fact__lead" aria-hidden="true"></span><span data-kp="vat">' + t(rub2(total * vat / (100 + vat))) + '</span></div>' : '') + '</div>';
+    if (k.terms && k.terms.length) h += '<div class="kp__terms">' + k.terms.map(function (x) { return fact(x[0], x[1]); }).join('') + '</div>';
+    return h + '</div></div>';
+  }
+
+  /* разговор в чате: последние реплики, раньше под «Ещё N»; в чате с клиентом поле ответа */
+  function talkPanel(c, withComposer) {
+    if (!c) return '';
+    var earlier = c.talk_earlier || [], all = ui.talkAll[c.id];
+    var lines = c.talk == null ? null : (all ? earlier.concat(c.talk) : c.talk);
+    var h = '<section class="talk" aria-label="Разговор в чате"><div class="talk__head"><span>Разговор в чате</span>' +
+      (earlier.length ? '<button class="pill pill--small' + (all ? '' : ' is-up') + '" type="button" data-act="more" data-id="' + esc(c.id) + '" aria-expanded="' + !!all + '">' + (all ? 'Свернуть' : 'Ещё ' + earlier.length) + IC.chev + '</button>' : '') + '</div>';
+    h += '<div class="talk__body" id="talk-' + esc(c.id) + '">' + (lines == null ? '<p class="muted">Загружаю переписку…</p>' : lines.map(lineHtml).join('')) +
+      (ui.typing[c.id] ? '<div class="line line--typing is-new"><span class="avatar avatar--24" aria-hidden="true">' + esc(c.initials || 'К') + '</span><p>Клиент печатает<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></p></div>' : '') + '</div>';
+    if (withComposer && c.status === 'in-chat') {
+      var d = ui.drafts['say-' + c.id] || (ui.drafts['say-' + c.id] = { say: '' });
+      h += '<div class="composer"><textarea class="field" rows="2" data-draft="say" data-id="say-' + esc(c.id) + '" placeholder="Ответ клиенту" aria-label="Ответ клиенту">' + esc(d.say) + '</textarea>' +
+        '<button class="btn btn--accent" type="button" data-act="say" data-id="' + esc(c.id) + '" data-needs="say"' + (d.say.trim() ? '' : ' disabled') + '>Отправить</button></div>';
     }
     return h + '</section>';
   }
-  function reviewed(id) {
-    jItems().forEach(function (i) { if (i.id === id) i.review = false; });
-    if (store.cases && store.cases.review) store.cases.review = store.cases.review.filter(function (r) { return r.id !== id; });
+  function lineHtml(l) {
+    var av = l.who === 'agent' ? BOT : l.who === 'client' ? '<span class="avatar avatar--24" aria-hidden="true">К</span>'
+      : '<span class="avatar avatar--24 avatar--staff" aria-hidden="true">' + esc(l.who === 'me' ? 'А' : l.initials || (l.name || 'М').charAt(0)) + '</span>';
+    var who = l.who === 'agent' ? 'Агент' : l.who === 'client' ? 'Клиент' : l.who === 'me' ? 'Антон' : l.name || 'Менеджер';
+    return '<div class="line' + (l._new ? ' is-new' : '') + '">' + av + '<p><span class="line__who">' + esc(who) + '</span> ' + t(l.text) + '</p></div>';
+  }
+  // переписка и шаги с сервера приходят отдельным запросом, когда карточку открыли
+  function ensureTalk() {
+    if (isLocal('cases') && (ui.tab === 'today' || !jItemLive())) return;
+    var c = ui.tab === 'today' ? findCase(ui.sel) : ui.tab === 'journal' ? jDetail(jSelected()) : null;
+    if (!c || c.talk != null || c._loading || !c.id) return;
+    c._loading = true;
+    call('GET', '/cases/' + encodeURIComponent(c.id) + '/events').then(function (r) {
+      c._loading = false;
+      var all = r.talk || [];
+      c.talk_earlier = all.length > 4 ? all.slice(0, all.length - 4) : [];
+      c.talk = all.length > 4 ? all.slice(-4) : all;
+      if (c.steps == null) c.steps = r.steps || [];
+      if (r.cost && !c.cost) c.cost = r.cost;
+      if (!c.first) { var cl = all.filter(function (l) { return l.who === 'client'; }); if (cl.length) c.first = cl[cl.length - 1].text; }
+      render();
+    }, function () { c._loading = false; c.talk = []; if (c.steps == null) c.steps = []; render(); });
+  }
+  function jItemLive() { return !isLocal('journal'); }
+
+  /* ---------- Журнал ---------- */
+  function jItemsFor(day) {
+    var all = (store.journal && store.journal.items) || [], today = midnight(new Date());
+    if (!isLocal('journal')) return all.filter(function (it) { return it.time && sameDay(new Date(it.time), day); });
+    if (sameDay(day, today)) return all;
+    // прошлые дни в примере: те же темы, все разговоры закрыты
+    var back = Math.round((today - day) / 864e5), keep = 30 + (back * 7) % 17;
+    return all.filter(function (it) { return !it.case_id && !it.review && it.id !== 'vector'; }).slice(0, keep).map(function (it) {
+      var x = copy(it); x.id = it.id + '-' + back; x.status = { tone: 'success', text: it.status.text }; return x;
+    });
+  }
+  function jStatus(it) {
+    if (!it.case_id) return it.status || { tone: 'neutral', text: '' };
+    var c = findCase(it.case_id);
+    if (!c) return it.status;
+    if (c.owner && c.status === 'waiting') return { tone: 'neutral', text: 'Отвечает ' + c.owner.name, open: true };
+    if (c.status === 'waiting') return { tone: 'neutral', text: 'Ждёт ответа', open: true };
+    if (c.status === 'in-chat') return { tone: 'accent', text: 'Вы в чате', open: true };
+    return { tone: 'success', text: (c.done_label || 'Готово').replace(/ в \d{1,2}:\d{2}$/, '') };
+  }
+  function jDetail(it) { if (!it) return null; return it.case_id ? findCase(it.case_id) || it.detail : it.detail; }
+  function jSelected() { return jItemsFor(ui.jDay).filter(function (i) { return i.id === ui.jSel; })[0]; }
+  function dayLabel(d) {
+    var today = midnight(new Date()), back = Math.round((today - midnight(d)) / 864e5);
+    return back === 0 ? 'Сегодня' : back === 1 ? 'Вчера' : d.getDate() + ' ' + MONTHS[d.getMonth()];
+  }
+  function jGroups(items, day) {
+    var s = store.settings || {}, start = mins(s.from || '9:00'), end = mins(s.to || '18:00'), defs = [];
+    var isToday = sameDay(day, new Date()), now = isLocal('journal') ? mins(SAMPLE.now) : mins(new Date().toISOString());
+    if (isToday && now >= start) {
+      var h = Math.floor(now / 60) * 60;
+      defs.push({ id: 'cur', label: 'С ' + hmOf(h), from: h, to: 1440 });
+      if (h - 60 >= start) defs.push({ id: 'prev', label: hmOf(h - 60) + '–' + hmOf(h), from: h - 60, to: h });
+      if (h - 60 > start) defs.push({ id: 'work', label: hmOf(start) + '–' + hmOf(h - 60), from: start, to: h - 60 });
+    } else if (!isToday) {
+      defs.push({ id: 'eve', label: 'После ' + hmOf(end), from: end, to: 1440 }, { id: 'work', label: hmOf(start) + '–' + hmOf(end), from: start, to: end });
+    }
+    defs.push({ id: 'night', label: 'До ' + hmOf(start) + ', без менеджеров', from: 0, to: isToday && now < start ? 1440 : start });
+    defs.forEach(function (g) { g.items = items.filter(function (it) { var m = mins(it.time); return m >= g.from && m < g.to; }); });
+    return defs.filter(function (g) { return g.items.length; });
+  }
+  function viewJournal() {
+    var day = ui.jDay, items = jItemsFor(day);
+    var open = items.filter(function (i) { return jStatus(i).open; }).length, review = items.filter(function (i) { return i.review; }).length;
+    var q = ui.jQuery.trim().toLowerCase();
+    var shown = items.filter(function (it) {
+      if (ui.jFilter === 'open' && !jStatus(it).open) return false;
+      if (ui.jFilter === 'review' && !it.review) return false;
+      return !q || (it.title + ' ' + it.client + ' ' + (it.inn || '') + ' ' + (it.order || '')).toLowerCase().indexOf(q) >= 0;
+    });
+    if (!ui.jSel || !shown.some(function (i) { return i.id === ui.jSel; })) {
+      var pref = store.journal && store.journal.selected;
+      ui.jSel = shown.some(function (i) { return i.id === pref; }) && sameDay(day, new Date()) ? pref : shown.length ? shown[0].id : null;
+    }
+    var groups = jGroups(shown, day), dk = day.toDateString(), filtered = !!(q || ui.jFilter);
+    var left = '<section class="panel" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
+      '<button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button></div>' +
+      '<div class="chips"><button class="chip' + (ui.jFilter === 'open' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="open" aria-pressed="' + (ui.jFilter === 'open') + '">Не закрыты' + counter(open, true) + '</button>' +
+      '<button class="chip' + (ui.jFilter === 'review' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="review" aria-pressed="' + (ui.jFilter === 'review') + '">Проверить' + counter(review, !review) + '</button></div>' +
+      '<label class="search">' + IC.search + '<input class="field" type="search" data-act="jsearch" placeholder="Клиент, ИНН или № заказа" aria-label="Поиск по журналу" value="' + esc(ui.jQuery) + '"></label>' +
+      '<div class="groups">' + (groups.length ? groups.map(function (g, i) {
+        var key = dk + g.id, isOpen = filtered || (ui.jOpen[key] != null ? ui.jOpen[key] : i === 0);
+        return '<div class="group"><button class="ghead" type="button" data-act="jgroup" data-key="' + esc(key) + '" data-open="' + isOpen + '" aria-expanded="' + isOpen + '"><span>' + t(g.label) + '</span>' + counter(g.items.length, true) + IC.chev + '</button>' +
+          (isOpen ? '<div class="glist">' + g.items.map(jRow).join('') + '</div>' : '') + '</div>';
+      }).join('') : '<p class="nothing">' + t(q ? 'Ничего не нашлось. Попробуйте название компании, ИНН или номер заказа' : ui.jFilter === 'review' ? 'Проверять нечего' : ui.jFilter === 'open' ? 'Незакрытых разговоров нет' : 'Разговоров за этот день нет') + '</p>') + '</div></section>';
+    var it = jSelected(), c = jDetail(it), swap = ui.lastSel !== 'j' + ui.jSel; ui.lastSel = 'j' + ui.jSel;
+    var side = c ? talkPanel(c, false) + (c.cost ? '<section class="card cost"><p class="medium">Во что обошёлся</p>' + facts(c.cost) + '</section>' : '') : '';
+    return '<div class="today">' + left + '<div class="' + (swap ? 'swap-in' : '') + '" style="min-width:0">' + (c ? caseCard(c, 'journal') : '<section class="case"><p class="muted">Выберите разговор слева</p></section>') + '</div>' +
+      '<div class="side' + (swap ? ' swap-in' : '') + '">' + side + '</div></div>';
+  }
+  function jRow(it) {
+    var s = jStatus(it), sel = it.id === ui.jSel;
+    return '<button class="lrow' + (sel ? ' is-selected' : '') + '" type="button" data-act="jpick" data-id="' + esc(it.id) + '" aria-pressed="' + sel + '">' +
+      '<span class="lrow__line"><span class="lrow__title" title="' + esc(it.title) + '">' + t(it.title) + '</span><span class="lrow__time">' + esc(hm(it.time)) + '</span></span>' +
+      '<span class="lrow__line"><span class="lrow__status' + (s.open ? ' is-open' : '') + '"><span class="dot dot--' + (s.tone || 'neutral') + '" aria-hidden="true"></span>' + t(s.text) + '</span><span class="lrow__client" title="' + esc(it.client) + '">' + t(it.client) + '</span></span></button>';
   }
 
   /* ---------- Знания ---------- */
-  function actionRow(r, linkAct, linkText, extra) {
-    return '<div class="row"><span class="row__main"><span class="row__title">' + t(r.title) + '</span><span class="row__meta">' + t(r.meta) + '</span></span>' +
-      '<button class="link row__action" type="button" data-act="' + linkAct + '" data-id="' + esc(r.id) + '">' + linkText + '</button></div>' + (extra || '');
+  function kGroup(key, label, count, body, startOpen) {
+    var open = ui.kQuery.trim() ? true : ui.kOpen[key] != null ? ui.kOpen[key] : startOpen !== false;
+    return '<div class="group"><button class="ghead ghead--muted" type="button" data-act="kgroup" data-key="' + key + '" data-open="' + open + '" aria-expanded="' + open + '"><span>' + t(label) + '</span>' + counter(count, true) + IC.chev + '</button>' +
+      (open ? '<div class="plates glist">' + body + '</div>' : '') + '</div>';
+  }
+  function plate(act, it, right) {
+    return '<button class="plate" type="button" data-act="' + act + '" data-id="' + esc(it.id) + '"><span class="plate__line"><span class="plate__title">' + t(it.title) + '</span>' + (right ? '<span class="medium">' + t(right) + '</span>' : '') + '</span>' +
+      (it.meta ? '<span class="plate__meta">' + t(it.meta) + '</span>' : '') + '</button>';
   }
   function viewKnowledge() {
-    var k = store.knowledge || {};
-    var pending = k.pending || [], rules = k.rules || [], arts = k.articles || [], gaps = k.gaps || [], fixes = k.fixes || [];
-    var q = ui.aQuery.trim().toLowerCase();
-    var found = arts.filter(function (a) { return !q || (a.title + ' ' + (a.text || '')).toLowerCase().indexOf(q) >= 0; });
-    var shown = ui.aAll || q ? found : found.slice(0, 5);
-    var main = '';
-    main += '<section class="panel">' + panelHead('Ждут добавления в справку', counter(pending.length, pending.length ? '' : 'zero')) + '<div class="panel__list panel__list--tight">' +
-      (pending.length ? pending.map(function (p) { return actionRow(p, 'k-add', 'Добавить в справку'); }).join('') : '<p class="panel__note">' + t('Новых ответов менеджеров для справки нет') + '</p>') + '</div></section>';
-    main += '<section class="panel">' + panelHead('Правила агента', counter(rules.filter(function (r) { return !r.off; }).length)) + '<div class="panel__list panel__list--tight">' +
-      (rules.length ? rules.map(function (r) { return actionRow(r, 'k-rule', r.off ? 'Включить' : 'Выключить'); }).join('') : '<p class="panel__note">' + t('Правил пока нет. Решение в карточке можно сделать правилом') + '</p>') + '</div></section>';
-    main += '<section class="panel">' + panelHead('Статьи справки', counter(k.articles_total && !isLocal('knowledge') ? k.articles_total : arts.length)) +
-      '<label class="field" style="max-width:none">' + IC.search + '<input type="search" data-act="asearch" placeholder="Тема или слово из статьи" aria-label="Поиск по справке" value="' + esc(ui.aQuery) + '"></label>' +
-      '<div class="panel__list panel__list--tight">' + (shown.length ? shown.map(function (a) {
-        return actionRow(a, 'a-open', ui.aOpen === a.id ? 'Свернуть' : 'Открыть', ui.aOpen === a.id ? articleEditor(a) : '');
-      }).join('') : '<p class="panel__note">Ничего не нашлось</p>') + '</div>' +
-      (!q && found.length > shown.length ? '<button class="link" type="button" data-act="amore">Показать ещё ' + (found.length - shown.length) + '</button>' : '') + '</section>';
-    var side = '<section class="panel">' + panelHead('Где агенту не хватает ответов') + '<div class="panel__list panel__list--tight">' +
-      (gaps.length ? gaps.map(function (g) { return actionRow(g, 'g-open', ui.gapOpen === g.id ? 'Свернуть' : 'Дописать справку', ui.gapOpen === g.id ? gapEditor(g) : ''); }).join('') : '<p class="panel__note">Пробелов в справке не видно</p>') + '</div></section>';
-    side += '<section class="panel">' + panelHead('Поправки из проверок', counter(fixes.length, fixes.length ? '' : 'zero')) + '<div class="panel__list panel__list--tight">' +
-      (fixes.length ? fixes.map(function (f) { return actionRow(f, 'f-del', 'Убрать'); }).join('') : '<p class="panel__note">' + t('Поправок нет. Их добавляют в журнале при проверке разговора') + '</p>') + '</div></section>';
-    return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + side + '</div></div>';
-  }
-  function articleEditor(a) {
-    var d = ui.drafts['a-' + a.id] || (ui.drafts['a-' + a.id] = { text: a.text || '' });
-    return '<div class="row" style="flex-direction:column;align-items:stretch;gap:12px"><textarea class="textarea" rows="4" data-draft="text" data-id="a-' + esc(a.id) + '" aria-label="Текст статьи «' + esc(a.title) + '»" placeholder="Текст статьи, по нему отвечает агент">' + esc(d.text) + '</textarea>' +
-      '<div class="detail__actions"><button class="btn btn--primary" type="button" data-act="a-save" data-id="' + esc(a.id) + '">Сохранить статью</button></div></div>';
-  }
-  function gapEditor(g) {
-    var d = ui.drafts['g-' + g.id] || (ui.drafts['g-' + g.id] = { text: '' });
-    return '<div class="row" style="flex-direction:column;align-items:stretch;gap:12px"><textarea class="textarea" rows="4" data-draft="text" data-id="g-' + esc(g.id) + '" aria-label="Новая статья: ' + esc(g.title) + '" placeholder="Что агент должен отвечать на такие вопросы">' + esc(d.text) + '</textarea>' +
-      '<div class="detail__actions"><button class="btn btn--primary" type="button" data-act="g-save" data-id="' + esc(g.id) + '"' + (d.text.trim() ? '' : ' disabled') + '>Добавить в справку</button></div></div>';
+    var k = store.knowledge || {}, q = ui.kQuery.trim().toLowerCase();
+    var pending = k.pending || [], gaps = k.gaps || [], fixes = k.fixes || [];
+    var match = function (x) { return !q || (x.title + ' ' + (x.meta || '') + ' ' + (x.text || '')).toLowerCase().indexOf(q) >= 0; };
+    var rules = (k.rules || []).filter(match), arts = (k.articles || []).filter(match);
+    var shownArts = ui.kAll || q ? arts : arts.slice(0, 5);
+    var left = '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
+      (pending.length + gaps.length + fixes.length ? '<div class="groups">' +
+        (pending.length ? kGroup('pending', 'Ответы для справки', pending.length, pending.map(function (p) { return plate('kpending', p); }).join('')) : '') +
+        (gaps.length ? kGroup('gaps', 'Темы без ответа', gaps.length, gaps.map(function (g) { return plate('kgap', g, g.share); }).join('')) : '') +
+        (fixes.length ? kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.map(function (f) { return plate('kfix', f); }).join('')) : '') + '</div>'
+        : '<p class="nothing">' + t('Всё разобрано: новых ответов, тем и поправок нет') + '</p>') + '</section>';
+    var right = '<section class="panel" aria-label="Что знает агент"><h2 class="h2">Что знает агент</h2>' +
+      '<label class="search">' + IC.search + '<input class="field" type="search" data-act="ksearch" placeholder="Правило, статья или слово" aria-label="Поиск по знаниям агента" value="' + esc(ui.kQuery) + '"></label><div class="groups">' +
+      kGroup('rules', 'Правила агента', rules.length, rules.length ? rules.map(function (r) { return plate('krule', r); }).join('') : '<p class="nothing">Правил не нашлось</p>') +
+      kGroup('arts', 'Статьи справки', q ? arts.length : (k.articles || []).length, shownArts.length ? shownArts.map(function (a) { return plate('karticle', a); }).join('') : '<p class="nothing">Статей не нашлось</p>') +
+      '</div>' + (!q && !ui.kAll && arts.length > 5 && ui.kOpen.arts !== false ? '<div><button class="btn btn--grey" type="button" data-act="kall">Все статьи</button></div>' : '') + '</section>';
+    return '<div class="knowledge">' + left + right + '</div>';
   }
   function byId(list, id) { return (list || []).filter(function (x) { return x.id === id; })[0]; }
   function without(list, id) { return (list || []).filter(function (x) { return x.id !== id; }); }
 
   /* ---------- Агент ---------- */
   function viewAgent() {
-    var st = (store.status && store.status.state) || 'on';
-    var paused = st === 'paused';
-    var head = '<div class="agent__head"><div class="chips">' +
-      '<a class="chip chip--plain' + (ui.agentView === 'work' ? ' is-active' : '') + '" href="#agent"' + (ui.agentView === 'work' ? ' aria-current="page"' : '') + '>Работа</a>' +
-      '<a class="chip chip--plain' + (ui.agentView === 'settings' ? ' is-active' : '') + '" href="#agent/settings"' + (ui.agentView === 'settings' ? ' aria-current="page"' : '') + '>Настройки</a></div>' +
-      '<div class="agent__pause">' + (paused
-        ? '<span>' + t('Вы поставили паузу ' + (store.status.since ? 'сегодня в ' + hm(store.status.since) : '') + '. Все обращения идут менеджерам, как до агента').replace(' .', '.') + '</span><button class="btn btn--primary" type="button" data-act="pause" data-on="0">Включить агента</button>'
-        : '<span>' + t('На паузе все обращения идут менеджерам, как до агента') + '</span><button class="btn btn--secondary btn--icon-left" type="button" data-act="pause" data-on="1">' + IC.pause + 'Поставить на паузу</button>') +
-      '</div></div>';
-    return '<div style="display:flex;flex-direction:column;gap:28px">' + head + (ui.agentView === 'settings' ? viewSettings() : viewWork()) + '</div>';
+    return '<div class="agent"><nav class="subtabs" aria-label="Агент"><a class="subtab' + (ui.sub === 'work' ? ' is-active' : '') + '" href="#agent"' + (ui.sub === 'work' ? ' aria-current="page"' : '') + '>Работа</a>' +
+      '<a class="subtab' + (ui.sub === 'settings' ? ' is-active' : '') + '" href="#agent/settings"' + (ui.sub === 'settings' ? ' aria-current="page"' : '') + '>Настройки</a></nav>' +
+      (ui.sub === 'settings' ? viewSettings() : viewWork()) + '</div>';
+  }
+  function spend() {
+    var s = store.stats || {}, past = (s.days || []).reduce(function (a, b) { return a + b; }, 0);
+    var spent = status().state === 'limit' ? (store.settings || {}).limit_rub || 0 : Math.round(past + (s.today_rub || 0));
+    var forecast = Math.round(past + (s.today_rub || 0) + (s.forecast_rub || 0) * ((s.days_in_month || 30) - (s.today_day || 1)));
+    return { spent: spent, forecast: forecast };
+  }
+  function benefit() {
+    var s = store.stats || {}, b = ui.benefit || (ui.benefit = copy(s.benefit || { minutes: 30, rate: 870 }));
+    var closed = (s.requests || {}).closed || 0, hours = closed * (b.minutes || 0) / 60, gross = hours * (b.rate || 0);
+    var cost = spend().spent + (s.server_rub || 0);
+    return { hours: hours, gross: gross, cost: cost, net: gross - cost, per: cost ? gross / cost : 0 };
   }
   function viewWork() {
-    var s = store.stats || {}, set = store.settings || {};
-    var w = waiting().length, rv = ((store.cases && store.cases.review) || []).length;
-    var tiles = (s.tiles || []).map(function (tl) {
-      var link = tl.link;
-      if (link && link.href === '#today' && store.cases) link = { href: '#today', text: w ? w + ' ' + plural(w, 'ждёт', 'ждут', 'ждут') + ' вашего решения' : 'Решать нечего' };
-      if (link && link.href === '#journal/review' && store.cases) link = { href: '#journal/review', text: rv ? rv + ' ' + plural(rv, 'ждёт', 'ждут', 'ждут') + ' вашей проверки' : 'Проверять нечего' };
-      return '<section class="tile"><p class="t-title">' + t(tl.title) + '</p><div class="tile__figures"><div class="tile__figure"><span class="t-number">' + t(tl.month) + '</span><span class="t-muted">за ' + esc(s.month || 'месяц') + '</span></div><span class="tile__divider"></span>' +
-        '<div class="tile__figure"><span class="t-number">' + t(tl.today) + '</span><span class="t-muted">сегодня</span></div></div>' +
-        (link ? '<a class="link" href="' + esc(link.href) + '">' + t(link.text) + '</a>' : tl.note ? '<p class="tile__note">' + t(tl.note) + '</p>' : '') + '</section>';
-    }).join('');
-    var h = '<div class="stats">' + tiles + '</div>';
-    h += '<div class="columns"><div class="column"><section class="panel">' + panelHead('Работа агента по дням, ' + (s.month || '')) + chart(s) + '</section></div>';
-    var sp = s.spend || {}, limit = set.limit_rub || sp.limit || 0, warn = set.warn_rub || sp.warn || 0;
-    var pct = limit ? Math.min(100, (sp.spent || 0) / limit * 100) : 0;
-    h += '<div class="column"><section class="panel">' + panelHead('Лимит на работу агента, ' + (s.month || '')) +
-      '<div class="spend"><div class="spend__total"><span class="t-number">' + money(sp.spent || 0) + '</span><span class="t-lead t-muted">из ' + money(limit) + '</span></div>' +
-      '<div class="meter" role="img" aria-label="' + esc('Потрачено ' + Math.round(pct) + '% лимита') + '"><span class="meter__track"></span><span class="meter__spent" style="width:' + pct + '%"></span>' + (warn && limit ? '<span class="meter__threshold" style="left:calc(' + (warn / limit * 100) + '% - 1px)"></span>' : '') + '</div>' +
-      (sp.forecast ? '<p>' + t(sp.forecast) + '</p>' : '') + '</div>' +
-      (warn ? '<p>' + t('При ' + money(warn) + ' письмо получат менеджеры и бухгалтерия') + '</p>' : '') +
-      '<p>' + t('При ' + money(limit) + ' агент замолкает до 1 ' + nextMonth() + ', чат идёт менеджерам') + '</p></section></div></div>';
-    var topics = s.topics || [], max = Math.max.apply(null, topics.map(function (x) { return x.share; }).concat([1]));
-    h += '<div class="columns"><div class="column"><section class="panel">' + panelHead('О чём спрашивают, ' + (s.month || '')) + '<div class="panel__list panel__list--tight">' +
-      topics.map(function (tp) {
-        return '<div class="topic"><div class="topic__top"><span class="topic__title">' + t(tp.title) + '</span><span class="topic__count">' + tp.count + '</span><span class="topic__share">' + tp.share + '%</span></div>' +
-          '<div class="topic__track"><div class="topic__fill" style="width:' + (tp.share / max * 100) + '%"></div></div>' +
-          (tp.note ? '<p class="topic__note">' + t(tp.note) + '</p>' : '') + (tp.link ? '<a class="link" href="#knowledge">' + t(tp.link) + '</a>' : '') + '</div>';
-      }).join('') + '</div></section></div>';
-    var cn = s.connections || { ok: true, text: '' };
-    h += '<div class="column"><section class="panel">' + panelHead('Сбои за ' + (s.month || 'месяц')) +
-      '<div class="connections">' + (cn.ok ? IC.ok : IC.fail) + '<p>' + t(cn.text) + '</p></div><div class="panel__list panel__list--tight">' +
-      (s.outages || []).map(function (o) { return '<div class="row"><span class="row__main"><span class="row__title">' + t(o.title) + '</span><span class="row__meta">' + t(o.meta) + '</span></span></div>'; }).join('') +
-      '</div><p class="panel__note">' + t('При сбое чат сразу уходит менеджерам, клиент не остаётся без ответа') + '</p></section></div></div>';
-    if ((s.months || []).length) {
-      h += '<section class="panel">' + panelHead('Прошлые месяцы') + '<div class="months">' + s.months.map(function (m) {
-        return '<div class="month"><p class="t-title">' + t(m.name) + '</p><div class="month__total"><span class="t-number">' + t(m.total) + '</span><span class="t-muted">всего за месяц</span></div><div class="month__divider"></div>' +
-          '<div class="month__facts">' + m.facts.map(function (f) { return '<span class="fact"><span class="fact__label">' + t(f[0]) + '</span><span class="fact__value">' + t(f[1]) + '</span></span>'; }).join('') + '</div></div>';
-      }).join('') + '</div></section>';
-    }
-    return h;
+    var s = store.stats || {}, set = store.settings || {}, r = s.requests || {}, sp = spend(), limit = set.limit_rub || 0, warn = set.warn_rub || 0;
+    var pct = function (n) { return r.total ? Math.round(n / r.total * 100) : 0; };
+    var left = '<section class="panel"><h2 class="h2">Обращения ' + esc(s.month_in || '') + '</h2>' +
+      '<div class="total"><span class="num">' + group3(r.total || 0) + '</span><span class="muted">' + t('обращений, сегодня ' + (r.today || 0)) + '</span></div>' +
+      '<div class="split" role="img" aria-label="' + esc('Закрыл сам ' + pct(r.closed) + '%, передал менеджерам ' + pct(r.handed) + '%, не закончили ' + pct(r.unfinished) + '%') + '">' +
+      '<span style="flex:' + r.closed + ';background:var(--success)"></span><span style="flex:' + r.handed + ';background:var(--accent);animation-delay:60ms"></span><span style="flex:' + r.unfinished + ';background:var(--icon);animation-delay:120ms"></span></div>' +
+      '<div class="split__legend">' + [['success', 'Закрыл сам', r.closed], ['accent', 'Передал менеджерам', r.handed], ['neutral', 'Не закончили', r.unfinished]].map(function (x) {
+        return '<div class="split__item">' + badge(x[0], x[1]) + '<span><b>' + pct(x[2]) + '%</b> <span class="muted">' + group3(x[2]) + '</span></span></div>';
+      }).join('') + '</div>' + facts(s.speed || []) + '<p class="panel__note">' + t(s.speed_note || '') + '</p></section>';
+    left += '<section class="panel"><h2 class="h2">Расходы на агента, ' + esc(s.month || '') + '</h2>' +
+      '<div class="spend-head"><span class="total"><span class="num">' + money(sp.spent) + '</span><span class="muted">' + t('из лимита ' + money(limit)) + '</span></span>' +
+      '<span class="muted">' + t('к ' + (s.days_in_month || 30) + ' ' + MONTHS[s.month_index || 10] + ' около ' + money(sp.forecast)) + '</span></div>' +
+      '<div><div class="meter" role="img" aria-label="' + esc('Потрачено ' + money(sp.spent) + ' из ' + money(limit)) + '"><span class="meter__fill" style="width:' + Math.min(100, limit ? sp.spent / limit * 100 : 0) + '%"></span>' +
+      (warn && limit ? '<span class="meter__mark" style="left:calc(' + (warn / limit * 100) + '% - 1px)"></span>' : '') + '</div>' +
+      (warn && limit ? '<div class="meter__caption"><span style="left:' + (warn / limit * 100) + '%">' + t('предупреждение при ' + money(warn)) + '</span></div>' : '') + '</div>' +
+      chart(s) + facts(s.spend_facts || []) + '<a class="link" href="#agent/settings">Лимит и предупреждение в настройках</a></section>';
+    var year = ui.year || (s.years || [s.year])[0];
+    left += '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2">Прошлые месяцы</h2><button class="select" type="button" data-act="year" aria-haspopup="menu" aria-expanded="false">' + esc(year) + IC.chev + '</button></div>' +
+      '<table class="table"><thead><tr><th scope="col">Месяц</th><th scope="col">Обращений</th><th scope="col">Закрыл сам</th><th scope="col">Время менеджеров</th><th scope="col">Работа агента</th><th scope="col">Всего</th></tr></thead><tbody>' +
+      (s.months || []).map(function (m) { return '<tr><td>' + t(m.name) + '</td><td>' + t(m.requests) + '</td><td>' + t(m.closed) + '</td><td>' + t(m.manager_time) + '</td><td>' + t(m.agent) + '</td><td>' + t(m.total) + '</td></tr>'; }).join('') +
+      '</tbody></table><p class="panel__note">' + t('Всего = работа агента и сервер ' + money(s.server_rub || 0) + ' в месяц.') + '</p></section>';
+
+    var right = '<section class="panel"><h2 class="h2">Состояние агента</h2>' + facts(s.health || []) +
+      (s.outage ? '<div class="facts"><p class="medium">' + t('Сбои ' + (s.month_in || '')) + '</p><p>' + t(s.outage) + '</p></div>' : '') + '</section>';
+    var total = s.reasons_total || 1;
+    right += '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2">Почему передаёт менеджеру</h2><span class="tag">замер</span></div><div class="reasons">' +
+      (s.reasons || []).map(function (x, i) {
+        return '<div class="reason"><div class="reason__top"><span>' + t(x.title) + '</span><span>' + x.count + '</span></div><div class="reason__track"><div class="reason__fill" style="width:' + (x.count / total * 100) + '%;animation-delay:' + i * 40 + 'ms"></div></div>' +
+          (x.note ? '<p class="muted">' + t(x.note) + '</p>' : '') + (x.link ? '<div><button class="link" type="button" data-act="gap-link" data-id="' + esc(x.gap || '') + '">' + t(x.link) + '</button></div>' : '') + '</div>';
+      }).join('') + '</div><p class="panel__note">' + t(s.reasons_note || '') + '</p></section>';
+    var b = benefit(), bb = ui.benefit;
+    right += '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2">Выгода ' + esc(s.month_in || '') + '</h2><span class="tag">оценка</span></div>' +
+      '<div><p class="num" data-b="net">' + money(Math.max(0, b.net)) + '</p><p class="muted">сэкономил магазину за вычетом расходов</p></div>' +
+      '<div class="facts" data-b="facts">' + benefitFacts(b) + '</div>' +
+      '<div class="facts" style="gap:12px"><label class="calc"><span>' + t((s.benefit || {}).minutes_hint || 'Минут на обращение') + '</span><input class="field field--num" inputmode="numeric" data-act="bmin" value="' + esc(bb.minutes) + '"></label>' +
+      '<label class="calc"><span>' + t((s.benefit || {}).rate_hint || 'Час менеджера, ₽') + '</span><input class="field field--num" inputmode="numeric" data-act="brate" value="' + esc(group3(bb.rate)) + '"></label></div>' +
+      '<p class="panel__note">' + t(s.benefit_note || '') + '</p></section>';
+    return '<div class="agent-cols"><div class="col">' + left + '</div><div class="col">' + right + '</div></div>';
   }
-  function nextMonth() { var d = new Date(); return MONTHS[(d.getMonth() + 1) % 12]; }
+  function benefitFacts(b) { return fact('Время менеджеров', '≈' + Math.round(b.hours) + ' ч') + fact('Расходы на агента', money(b.cost)) + fact('На 1 ₽ расходов', '≈' + group3(Math.round(b.per)) + ' ₽'); }
+  function dayName(s, d) { var x = new Date(s.year || new Date().getFullYear(), s.month_index || 0, d); return d + ' ' + MONTHS[x.getMonth()] + ', ' + WEEKDAYS[x.getDay()]; }
+  function barValue(s, d) { return d < s.today_day ? (s.days || [])[d - 1] || 0 : d === s.today_day ? s.today_rub || 0 : s.forecast_rub || 0; }
   function chart(s) {
-    var n = s.days_in_month || 30, past = s.days || [], today = s.today_day || past.length + 1;
-    var vals = [];
-    for (var i = 1; i <= n; i++) vals.push(i < today ? past[i - 1] || 0 : i === today ? s.today_rub || 0 : s.forecast_rub || 0);
-    var top = Math.max(30, Math.ceil(Math.max.apply(null, vals) / 10) * 10 - (Math.max.apply(null, vals) > 30 && Math.max.apply(null, vals) <= 33 ? 10 : 0));
-    var px = 135 / top; // 135 px от нуля до верхней линии, как в макете
-    var grid = [top, top * 2 / 3, top / 3, 0].map(function (v, k) {
-      var y = 23 + k * 45;
-      return '<span class="chart__grid" style="top:' + y + 'px"></span><span class="chart__y" style="top:' + y + 'px">' + (v ? Math.round(v) + ' ₽' : '0') + '</span>';
-    }).join('');
+    var n = s.days_in_month || 30, today = s.today_day || 1, vals = [];
+    for (var d = 1; d <= n; d++) vals.push(barValue(s, d));
+    var top = Math.max(1, Math.ceil(Math.max.apply(null, vals) - 0.15)), px = 135 / top;
+    var grid = '';
+    for (var g = 0; g <= top; g++) grid += '<span class="chart__grid" style="bottom:' + (g * px) + 'px"></span><span class="chart__y" style="bottom:' + (g * px - 10) + 'px;transform:none">' + (g ? g + ' ₽' : '0') + '</span>';
     var bars = vals.map(function (v, k) {
-      var d = k + 1, cls = d < today ? '' : d === today ? ' chart__bar--today' : ' chart__bar--future';
-      return '<span class="chart__bar' + cls + '" style="height:' + Math.min(150, Math.round(v * px)) + 'px" title="' + d + ' ' + esc(MONTHS[new Date().getMonth()]) + ': ' + Math.round(v) + ' ₽' + (d > today ? ', прогноз' : '') + '"></span>';
+      var d = k + 1, cls = d < today ? '' : d === today ? ' bar--today' : ' bar--future';
+      return '<span class="bar' + cls + '" tabindex="0" data-day="' + d + '" aria-label="' + esc(tipText(s, d).join(': ')) + '"><i style="height:' + Math.round(v * px) + 'px;animation-delay:' + k * 10 + 'ms"></i></span>';
     }).join('');
     var marks = [1, 5, 10, 15, 20, today, n].filter(function (v, k, a) { return a.indexOf(v) === k && (v === today || Math.abs(v - today) > 2); });
     var xs = marks.map(function (d) { return '<span' + (d === today ? ' class="is-today"' : '') + ' style="left:' + ((d - 0.5) / n * 100) + '%">' + d + '</span>'; }).join('');
-    return '<div class="chart"><div class="chart__plot" role="img" aria-label="' + esc('Расход агента по дням: сегодня ' + Math.round(s.today_rub || 0) + ' ₽, прогноз ' + Math.round(s.forecast_rub || 0) + ' ₽ в день') + '">' + grid + '<div class="chart__bars">' + bars + '</div></div>' +
-      '<div class="chart__x">' + xs + '</div><div class="legend">' +
-      '<span class="legend__item"><span class="legend__mark"></span><span class="legend__label">Прошедшие дни</span><span class="legend__value">' + t(s.legend_past || '') + '</span></span>' +
-      '<span class="legend__item"><span class="legend__mark" style="background:var(--ink)"></span><span class="legend__label">Сегодня</span><span class="legend__value">' + Math.round(s.today_rub || 0) + ' ₽</span></span>' +
-      '<span class="legend__item"><span class="legend__mark" style="background:var(--chart-empty)"></span><span class="legend__label">Прогноз</span><span class="legend__value">' + Math.round(s.forecast_rub || 0) + ' ₽ в день</span></span></div></div>';
+    return '<div class="chart"><div class="chart__plot" style="height:' + (top * px + 4) + 'px">' + grid + '<div class="chart__bars">' + bars + '</div></div><div class="chart__x" aria-hidden="true">' + xs + '</div>' +
+      '<div class="legend"><span class="legend__item"><span class="dot dot--accent"></span>Прошедшие дни <b>' + t(s.legend_past || '') + '</b></span>' +
+      '<span class="legend__item"><span class="dot" style="background:var(--accent-hover)"></span>Сегодня <b>' + t(dec(s.today_rub || 0, 1) + ' ₽') + '</b></span>' +
+      '<span class="legend__item"><span class="dot" style="background:rgba(0,122,255,.14)"></span>Прогноз <b>' + t(dec(s.forecast_rub || 0, 1) + ' ₽ в день') + '</b></span></div></div>';
+  }
+  function tipText(s, d) {
+    var v = barValue(s, d);
+    return [dayName(s, d), d < s.today_day ? dec(v, 1) + ' ₽ за день' : d === s.today_day ? dec(v, 1) + ' ₽ за сегодня, день ещё идёт' : 'прогноз ' + dec(v, 1) + ' ₽'];
   }
 
-  function settingRow(key, title, meta, value, unit) {
-    if (ui.edit === key) {
-      return '<div class="row"><span class="row__main"><span class="row__meta">' + t(meta) + '</span><span class="setting__edit"><input class="input" data-edit="' + key + '" value="' + esc(value) + '" aria-label="' + esc(title) + '"' + (unit ? ' inputmode="numeric"' : '') + '>' + (unit ? '<span>' + unit + '</span>' : '') +
-        '<button class="btn btn--primary" type="button" data-act="edit-save" data-key="' + key + '">Сохранить</button><button class="link" type="button" data-act="edit-cancel">Отмена</button></span></span></div>';
-    }
-    return '<div class="row"><span class="row__main"><span class="row__title">' + t(title) + '</span><span class="row__meta">' + t(meta) + '</span></span><button class="link row__action" type="button" data-act="edit" data-key="' + key + '">Изменить</button></div>';
-  }
   function viewSettings() {
     var s = store.settings || {};
-    var main = '<section class="panel">' + panelHead('Лимит на работу агента') +
-      settingRow('limit_rub', money(s.limit_rub) + ' в месяц', 'Когда лимит потрачен, агент замолкает до 1-го числа, чат идёт менеджерам', s.limit_rub, '₽') +
-      settingRow('warn_rub', 'Предупреждение при ' + money(s.warn_rub), 'Письмо получат менеджеры и бухгалтерия', s.warn_rub, '₽') +
-      (s.server_rub ? '<p class="panel__note">' + t('Сервер ' + money(s.server_rub) + ' в месяц оплачивается отдельно и в лимит не входит') + '</p>' : '') + '</section>';
-    main += '<section class="panel">' + panelHead('Что ещё делает агент') + '<div class="panel__list panel__list--tight">' + (s.functions || []).map(function (f) {
-      return '<label class="row" style="cursor:pointer"><span class="row__main"><span class="row__title">' + t(f.title) + '</span><span class="row__meta">' + t(f.meta) + '</span></span><span class="switch"><input type="checkbox" data-act="fn" data-id="' + esc(f.id) + '"' + (f.on ? ' checked' : '') + ' aria-label="' + esc(f.title) + '"></span></label>';
-    }).join('') + '</div><p class="panel__note">' + t('Выключенная функция не тратит лимит. Ответы в чате на сайте останавливает только пауза') + '</p></section>';
-    var side = '<section class="panel">' + panelHead('Срок ответа и часы менеджеров') +
-      settingRow('answer_min', 'Ответ клиенту за ' + s.answer_min + ' минут', 'Этот срок агент называет клиенту, когда передаёт вопрос менеджеру', s.answer_min, 'мин') +
-      settingRow('hours', s.hours || '', 'В эти часы агент сразу передаёт сложный случай менеджеру', s.hours, '') +
-      '<p class="panel__note">' + t('Вечером и в выходные агент пишет клиенту, что менеджер ответит до 10:00 следующего рабочего дня') + '</p></section>';
-    side += '<section class="panel">' + panelHead('Модель') + '<div class="panel__list panel__list--tight" role="radiogroup" aria-label="Модель агента">' + (s.models || []).map(function (m) {
-      return '<div class="model"><label class="radio"><input type="radio" name="model" value="' + esc(m.id) + '" data-act="model"' + (s.model === m.id ? ' checked' : '') + '>' + esc(m.name) + '</label><span class="model__price"><span class="model__cost">' + t(m.cost) + '</span><span class="t-muted">' + t(m.month) + '</span></span></div>';
-    }).join('') + '</div>' + (s.model_note ? '<p class="panel__note">' + t(s.model_note) + '</p>' : '') + '</section>';
-    return '<div class="columns"><div class="column">' + main + '</div><div class="column">' + side + '</div></div>';
+    var warnBad = s.warn_rub >= s.limit_rub;
+    var limit = '<section class="panel"><h2 class="h2">Лимит на работу агента</h2><div class="fields">' +
+      '<label class="label"><span class="label__text">Лимит в месяц, ₽</span><input class="field" inputmode="numeric" data-set="limit_rub" value="' + esc(group3(s.limit_rub)) + '"></label>' +
+      '<label class="label"><span class="label__text">Предупредить при, ₽</span><input class="field' + (warnBad ? ' is-error' : '') + '" inputmode="numeric" data-set="warn_rub" value="' + esc(group3(s.warn_rub)) + '"' + (warnBad ? ' aria-invalid="true" aria-describedby="warnErr"' : '') + '></label></div>' +
+      (warnBad ? '<p class="error-text" id="warnErr">Предупреждение должно быть меньше лимита</p>' : '') +
+      '<p>' + rich('Когда лимит потрачен, агент **молчит до 1-го числа**, чаты идут менеджерам.\nО пороге менеджеры узнают **в кабинете' + (s.notify ? ' и уведомлением' : '') + '**.') + '</p></section>';
+    var hours = '<section class="panel"><h2 class="h2">Срок ответа и часы менеджеров</h2><div class="fields">' +
+      '<label class="label"><span class="label__text">Ответ менеджера обещаем через, мин</span><input class="field" inputmode="numeric" data-set="answer_min" value="' + esc(s.answer_min) + '"></label>' +
+      '<div class="label"><span class="label__text" id="hoursLabel">Часы менеджеров, по Москве</span><div class="hours" role="group" aria-labelledby="hoursLabel">' +
+      '<button class="select" type="button" data-act="set-days" aria-haspopup="menu" aria-expanded="false" aria-label="Дни: ' + esc(s.days) + '">' + esc(s.days) + IC.chev + '</button>' +
+      '<button class="select" type="button" data-act="set-from" aria-haspopup="menu" aria-expanded="false" aria-label="С ' + esc(s.from) + '">' + esc(s.from) + IC.chev + '</button><span class="muted" aria-hidden="true">–</span>' +
+      '<button class="select" type="button" data-act="set-to" aria-haspopup="menu" aria-expanded="false" aria-label="До ' + esc(s.to) + '">' + esc(s.to) + IC.chev + '</button></div></div></div>' +
+      '<p>' + rich('Этот срок агент **называет клиенту**, когда передаёт вопрос менеджеру.\nВечером и в выходные обещает ответ **до ' + hmOf(mins(s.from) + 60) + ' рабочего дня**.') + '</p></section>';
+    var notify = '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2" id="notifyTitle">Уведомления менеджерам</h2><button class="switch" type="button" role="switch" aria-checked="' + !!s.notify + '" aria-labelledby="notifyTitle" data-act="notify"></button></div>' +
+      '<p class="muted" style="margin-top:-8px">' + t('Пишем менеджеру, когда агент передаёт ему разговор') + '</p>' +
+      '<div class="options options--2' + (s.notify ? '' : ' is-off') + '" role="radiogroup" aria-label="Куда писать">' + (s.channels || []).map(function (ch) {
+        if (ch.off) return '<div class="option option--off" aria-disabled="true"><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></div>';
+        var on = s.channel === ch.id;
+        return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="channel" data-id="' + esc(ch.id) + '"' + (s.notify ? '' : ' disabled') + '><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></button>';
+      }).join('') + '</div><p>' + rich(s.notify ? 'Уведомления **бесплатные** и лимит не тратят.' : 'Уведомления выключены: о новых разговорах менеджеры узнают **только в кабинете**.') + '</p></section>';
+    var model = '<section class="panel"><h2 class="h2">Модель</h2><div class="options options--3" role="radiogroup" aria-label="Модель агента">' + (s.models || []).map(function (m) {
+      var on = s.model === m.id;
+      return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="model" data-id="' + esc(m.id) + '"><b>' + t(m.name) + '</b><span>' + t(m.cost) + '</span></button>';
+    }).join('') + '</div><p>' + rich('Модель **меняется сразу**: следующие обращения агент разберёт уже на ней.') + '</p><p class="panel__note">' + t(s.model_note || '') + '</p></section>';
+    return '<div class="settings-cols">' + limit + hours + notify + model + '</div>';
   }
-  function saveSettings(patch) {
+  function saveSettings(patch, done) {
     var s = store.settings;
-    return act('settings', 'PUT', '/agent/settings', patch, function (res) { Object.assign(s, res && typeof res === 'object' && res.limit_rub != null ? res : patch); });
+    return act('settings', 'PUT', '/agent/settings', patch, function (res) { Object.assign(s, res && typeof res === 'object' && res.limit_rub != null ? res : patch); })
+      .then(function () { if (done) toast(done); render(); }, function () { render(); });
   }
+
+  /* ---------- свои окна: меню и календарь под кнопкой ---------- */
+  var pop = null;
+  function openPop(anchor, html, opts) {
+    closePop(true);
+    opts = opts || {};
+    var el = document.createElement('div');
+    el.className = 'pop' + (opts.cls ? ' ' + opts.cls : '');
+    el.setAttribute('role', opts.role || 'menu');
+    el.innerHTML = html;
+    $('#layer').appendChild(el);
+    if (opts.width) el.style.width = opts.width + 'px';
+    pop = { el: el, anchor: anchor, align: opts.align, data: opts.data || {} };
+    anchor.setAttribute('aria-expanded', 'true');
+    place();
+    var first = $('[aria-checked="true"]', el) || $('.menu__item:not(:disabled), .cal__day.is-selected, .cal__day:not(:disabled)', el);
+    if (first) { first.focus({ preventScroll: true }); if (opts.scrollTo !== false) first.scrollIntoView({ block: 'nearest' }); }
+  }
+  function place() {
+    if (!pop) return;
+    var r = pop.anchor.getBoundingClientRect(), el = pop.el, w = el.offsetWidth, h = el.offsetHeight;
+    var left = pop.align === 'right' ? r.right - w : r.left;
+    left = Math.max(8, Math.min(left, innerWidth - w - 8));
+    var top = r.bottom + 8;
+    if (top + h > innerHeight - 8 && r.top - 8 - h > 8) top = r.top - 8 - h;
+    el.style.left = left + 'px'; el.style.top = top + 'px';
+  }
+  function closePop(instant, back) {
+    if (!pop) return;
+    var p = pop; pop = null;
+    p.anchor.setAttribute('aria-expanded', 'false');
+    if (back) p.anchor.focus();
+    if (instant) p.el.remove();
+    else { p.el.classList.add('is-closing'); setTimeout(function () { p.el.remove(); }, 160); }
+  }
+  function menu(items) {
+    return items.map(function (i) {
+      if (i === '-') return '<div class="menu__sep" role="separator"></div>';
+      return '<button class="menu__item" type="button" role="' + (i.check != null ? 'menuitemradio' : 'menuitem') + '"' + (i.check != null ? ' aria-checked="' + !!i.check + '"' : '') +
+        ' data-act="' + i.act + '" data-value="' + esc(i.value == null ? '' : i.value) + '"' + (i.disabled ? ' disabled' : '') + '><span>' + t(i.label) + '</span>' + (i.check ? IC.check.replace('currentColor', '#0070F0') : '') + '</button>';
+    }).join('');
+  }
+  function calendar(month, selected) {
+    var today = midnight(new Date()), y = month.getFullYear(), m = month.getMonth();
+    var first = new Date(y, m, 1), shift = (first.getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate();
+    var isCur = y === today.getFullYear() && m === today.getMonth();
+    var h = '<div class="cal" role="dialog" aria-label="Выбор дня"><div class="cal__head"><button class="cal__nav" type="button" data-act="cal-prev" aria-label="Предыдущий месяц">' + IC.prev + '</button>' +
+      '<b>' + MONTHS_1[m] + ' ' + y + '</b><button class="cal__nav" type="button" data-act="cal-next" aria-label="Следующий месяц"' + (isCur ? ' disabled' : '') + '>' + IC.next + '</button></div><div class="cal__grid">' +
+      ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(function (d) { return '<span class="cal__wd">' + d + '</span>'; }).join('');
+    for (var i = 0; i < shift; i++) h += '<span></span>';
+    for (var d = 1; d <= days; d++) {
+      var day = new Date(y, m, d), fut = day > today;
+      h += '<button class="cal__day' + (sameDay(day, today) ? ' is-today' : '') + (sameDay(day, selected) ? ' is-selected' : '') + '" type="button" data-act="cal-day" data-value="' + day.getTime() + '"' + (fut ? ' disabled' : '') +
+        ' aria-label="' + d + ' ' + MONTHS[m] + '"' + (sameDay(day, selected) ? ' aria-current="date"' : '') + '>' + d + '</button>';
+    }
+    return h + '</div></div>';
+  }
+  function dayMenu(anchor) {
+    var today = midnight(new Date()), items = [];
+    for (var b = 0; b < 4; b++) { var d = new Date(today); d.setDate(d.getDate() - b); items.push({ label: dayLabel(d), act: 'jday-pick', value: d.getTime(), check: sameDay(d, ui.jDay) }); }
+    items.push('-', { label: 'Выбрать дату…', act: 'jcal' });
+    openPop(anchor, menu(items), { width: 240 });
+  }
+  function timeMenu(anchor, key) {
+    var s = store.settings, items = [];
+    for (var m = 7 * 60; m <= 21 * 60; m += 30) {
+      var v = hmOf(m), bad = key === 'from' ? m >= mins(s.to) : m <= mins(s.from);
+      items.push({ label: v, act: 'set-time', value: key + '|' + v, check: s[key] === v, disabled: bad });
+    }
+    openPop(anchor, menu(items), { width: 160 });
+  }
+
+  /* ---------- свои окна: подтверждение поверх затемнения ---------- */
+  var dialog = null;
+  function openDialog(o) {
+    closePop(true);
+    var s = document.createElement('div');
+    s.className = 'scrim';
+    s.innerHTML = '<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle"><h2 class="h2" id="dlgTitle">' + t(o.title) + '</h2>' +
+      (o.text ? '<p class="dialog__text">' + rich(o.text) + '</p>' : '') + (o.body || '') +
+      (o.error ? '<p class="error-text" id="dlgErr" hidden></p>' : '') +
+      '<div class="dialog__buttons">' + (o.extra || '') + '<button class="btn btn--grey" type="button" data-act="dlg-cancel">' + t(o.cancel || 'Отмена') + '</button>' +
+      (o.ok ? '<button class="btn btn--accent" type="button" data-act="dlg-ok"' + (o.okDisabled ? ' disabled' : '') + '>' + t(o.ok) + '</button>' : '') + '</div></div>';
+    document.body.appendChild(s);
+    dialog = { el: s, back: document.activeElement, o: o };
+    s.addEventListener('mousedown', function (e) { if (e.target === s) closeDialog(); });
+    var f = $('input, textarea', s) || $('[data-act="dlg-ok"]', s) || $('[data-act="dlg-cancel"]', s);
+    if (f) { f.focus(); if (f.select && f.tagName === 'INPUT') f.select(); }
+  }
+  function closeDialog() {
+    if (!dialog) return;
+    var d = dialog; dialog = null;
+    d.el.classList.add('is-closing');
+    setTimeout(function () { d.el.remove(); }, 160);
+    if (d.back && d.back.focus && document.contains(d.back)) d.back.focus();
+  }
+  function dialogError(text) { var e = $('#dlgErr'); if (e) { e.hidden = !text; e.textContent = text || ''; } var f = $('.dialog .field'); if (f) f.classList.toggle('is-error', !!text); }
+
+  /* ---------- подсказка графика: после 300 мс наведения ---------- */
+  var tipTimer = 0, tipEl = null;
+  function showTip(bar) {
+    hideTip();
+    var s = store.stats, d = +bar.getAttribute('data-day'), txt = tipText(s, d);
+    tipEl = document.createElement('div'); tipEl.className = 'tip'; tipEl.setAttribute('role', 'tooltip');
+    tipEl.innerHTML = t(txt[0]) + '<span>' + t(txt[1]) + '</span>';
+    document.body.appendChild(tipEl);
+    var r = bar.getBoundingClientRect(), i = $('i', bar).getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    tipEl.style.left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8)) + 'px';
+    tipEl.style.top = Math.max(8, i.top - h - 8) + 'px';
+  }
+  function hideTip() { clearTimeout(tipTimer); if (tipEl) { tipEl.remove(); tipEl = null; } }
+  document.addEventListener('mouseover', function (e) {
+    var bar = e.target.closest && e.target.closest('.bar');
+    if (!bar) return;
+    clearTimeout(tipTimer); tipTimer = setTimeout(function () { showTip(bar); }, 300);
+  });
+  document.addEventListener('mouseout', function (e) { if (e.target.closest && e.target.closest('.bar') && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.bar') === e.target.closest('.bar'))) hideTip(); });
+  document.addEventListener('focusin', function (e) { if (e.target.classList && e.target.classList.contains('bar')) showTip(e.target); });
+  document.addEventListener('focusout', function (e) { if (e.target.classList && e.target.classList.contains('bar')) hideTip(); });
 
   /* ---------- черновики полей переживают перерисовку ---------- */
   function restoreDrafts() {
-    [].forEach.call(document.querySelectorAll('[data-draft]'), function (f) {
-      var d = ui.drafts[f.getAttribute('data-id')]; if (!d) return;
-      var k = f.getAttribute('data-draft');
-      if (k === 'reason') f.checked = d.reason === f.value;
-      else if (k === 'help') f.checked = !!d.help;
-      else if (k === 'rule') { /* значение уже в разметке */ }
-      else if (d[k] != null && f.value !== d[k]) f.value = d[k];
+    $$('[data-draft]').forEach(function (f) {
+      var d = ui.drafts[f.getAttribute('data-id')], k = f.getAttribute('data-draft');
+      if (d && d[k] != null && f.value !== d[k]) f.value = d[k];
     });
+  }
+  function rerenderKeep(f) {
+    var sel = '[data-act="' + f.getAttribute('data-act') + '"]', pos = f.selectionStart;
+    render().then(function () { var n = $(sel); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } });
   }
   document.addEventListener('input', function (e) {
     var f = e.target, k = f.getAttribute && f.getAttribute('data-draft');
     if (k) {
       var id = f.getAttribute('data-id'), d = ui.drafts[id] || (ui.drafts[id] = {});
-      if (k === 'rule') { d.rule = d.rule || {}; d.rule[f.getAttribute('data-key')] = Number(f.value.replace(/\D/g, '')) || 0; return; }
-      if (k === 'help') { d.help = f.checked; return; }
-      if (k === 'reason') return;
       d[k] = f.value;
-      var btn = f.closest('.case, .detail, .row, .detail__review');
-      var b = btn && btn.querySelector('.btn--primary');
-      if (b && (k === 'fix' || (k === 'reply' && findCase(id) && findCase(id).kind === 'answer') || (k === 'text' && id.indexOf('g-') === 0))) b.disabled = !f.value.trim();
+      var scope = f.closest('.case, .talk, .dialog') || document;
+      $$('[data-needs="' + k + '"]', scope).forEach(function (b) { b.disabled = !f.value.trim(); });
       return;
     }
     var a = f.getAttribute && f.getAttribute('data-act');
-    if (a === 'jsearch') { ui.jQuery = f.value; ui.jAll = false; rerenderKeep(f); }
-    if (a === 'asearch') { ui.aQuery = f.value; rerenderKeep(f); }
+    if (a === 'jsearch') { ui.jQuery = f.value; rerenderKeep(f); }
+    if (a === 'ksearch') { ui.kQuery = f.value; rerenderKeep(f); }
+    if (a === 'discount') {
+      var c = findCase(f.getAttribute('data-id')), v = num(f.value), bad = !(v >= 0 && v < 100) && f.value.trim() !== '';
+      f.classList.toggle('is-error', bad); f.setAttribute('aria-invalid', bad);
+      ui.discount[c.id] = bad || isNaN(v) ? 0 : v;
+      var total = kpTotal(c), card = f.closest('.case');
+      $('[data-kp="total"]', card).textContent = ty(rub2(total));
+      var vat = $('[data-kp="vat"]', card); if (vat) vat.textContent = ty(rub2(total * 22 / 122));
+      var pr = $('#price-' + c.id); if (pr) pr.textContent = money(total);
+      $('[data-act="send-kp"]', card).disabled = bad;
+    }
+    if (a === 'bmin' || a === 'brate') {
+      ui.benefit[a === 'bmin' ? 'minutes' : 'rate'] = num(f.value) || 0;
+      var b = benefit();
+      $('[data-b="net"]').textContent = money(Math.max(0, b.net));
+      $('[data-b="facts"]').innerHTML = benefitFacts(b);
+    }
   });
-  // перерисовать и вернуть курсор в поле поиска
-  function rerenderKeep(f) {
-    var sel = '[data-act="' + f.getAttribute('data-act') + '"]', pos = f.selectionStart;
-    render().then(function () { var n = $(sel); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } });
-  }
   document.addEventListener('change', function (e) {
-    var f = e.target, k = f.getAttribute('data-draft'), a = f.getAttribute('data-act');
-    if (k === 'reason') {
-      var c = findCase(f.getAttribute('data-id')), d = draft(c);
-      var prevAuto = replyFor(c, d.reason);
-      d.reason = f.value;
-      if (!d.reply || d.reply === prevAuto) d.reply = replyFor(c, d.reason);
-      render().then(function () { if (f.value === 'Другая причина') { var ta = $('.case.is-open textarea'); if (ta) ta.focus(); } });
-    }
-    if (k === 'help') { var dh = ui.drafts[f.getAttribute('data-id')] || {}; dh.help = f.checked; ui.drafts[f.getAttribute('data-id')] = dh; }
-    if (a === 'jscope') { if (f.getAttribute('data-key') === 'period') ui.jPeriod = f.value; else ui.jChannel = f.value; ui.jAll = false; render(); }
-    if (a === 'fn') {
-      var fn = byId(store.settings.functions, f.getAttribute('data-id')), on = f.checked;
-      var list = store.settings.functions.map(function (x) { return x.id === fn.id ? Object.assign({}, x, { on: on }) : x; });
-      saveSettings({ functions: list }).then(function () { toast(on ? 'Функция включена' : 'Функция выключена'); }, function () { f.checked = !on; });
-    }
-    if (a === 'model') saveSettings({ model: f.value }).then(function () { toast('Модель изменена'); render(); }, function () { render(); });
+    var f = e.target, key = f.getAttribute && f.getAttribute('data-set');
+    if (!key) return;
+    var s = store.settings, v = num(f.value);
+    if (!(v > 0)) { f.classList.add('is-error'); toast('Введите число больше нуля'); return; }
+    var patch = {}; patch[key] = Math.round(v);
+    var next = Object.assign({}, s, patch);
+    if (next.warn_rub >= next.limit_rub) { s[key] = patch[key]; render(); return; }
+    var msg = key === 'limit_rub' ? 'Лимит сохранён: ' + money(v) + ' в месяц' : key === 'warn_rub' ? 'Предупредим при ' + money(v) : 'Агент будет обещать ответ менеджера через ' + Math.round(v) + ' мин';
+    saveSettings(patch, msg);
   });
+
+  /* ---------- клавиатура: Esc закрывает окна, стрелки ходят по меню ---------- */
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      if (dialog) { e.preventDefault(); closeDialog(); return; }
+      if (pop) { e.preventDefault(); closePop(false, true); return; }
+    }
+    if (dialog && e.key === 'Tab') {
+      var fs = $$('button:not(:disabled), input, textarea', dialog.el); if (!fs.length) return;
+      var i = fs.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); fs[fs.length - 1].focus(); }
+      else if (!e.shiftKey && i === fs.length - 1) { e.preventDefault(); fs[0].focus(); }
+    }
+    if (dialog && e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); var ok = $('[data-act="dlg-ok"]', dialog.el); if (ok && !ok.disabled) ok.click(); }
+    if (pop && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      var items = $$('.menu__item:not(:disabled)', pop.el); if (!items.length) return;
+      e.preventDefault();
+      var j = items.indexOf(document.activeElement);
+      items[(j + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+    }
+    if (pop && e.key === 'Tab') closePop(true);
+    if (e.key === 'Enter' && e.target.getAttribute && e.target.getAttribute('data-set')) e.target.blur();
+  });
+  addEventListener('resize', function () { closePop(true); hideTip(); });
+  addEventListener('scroll', function () { place(); if (tipEl) hideTip(); }, true);
 
   /* ---------- нажатия ---------- */
-  document.addEventListener('keydown', function (e) {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.case.is-collapsed')) { e.preventDefault(); e.target.click(); }
-    if (e.key === 'Enter' && e.target.matches && e.target.matches('[data-edit]')) { var b = $('[data-act="edit-save"]'); if (b) b.click(); }
-    if (e.key === 'Escape' && ui.edit) { ui.edit = null; render(); }
+  document.addEventListener('mousedown', function (e) {
+    if (pop && !pop.el.contains(e.target) && !pop.anchor.contains(e.target)) closePop();
   });
   document.addEventListener('click', function (e) {
-    var b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT' || b.tagName === 'SELECT') return;
-    var a = b.getAttribute('data-act'), id = b.getAttribute('data-id'), c = id ? findCase(id) : null;
+    var b = e.target.closest('[data-act]');
+    if (!b || b.disabled || b.tagName === 'INPUT') return;
+    var a = b.getAttribute('data-act'), id = b.getAttribute('data-id'), val = b.getAttribute('data-value');
+    var c = id ? findCase(id) : null;
+    if (pop && b.closest('.pop') == null && b !== pop.anchor) closePop(true);
 
-    if (a === 'open') { ui.open = id; render(); return; }
-    if (a === 'collapse') { ui.open = '__none'; render(); return; }
-    if (a === 'history') {
-      ui.history[id] = !ui.history[id];
-      if (ui.history[id] && c && !c.events) {
-        if (isLocal('cases')) c.events = [];
-        else call('GET', '/cases/' + encodeURIComponent(id) + '/events').then(function (r) { c.events = r.events || []; render(); }, function () { c.events = []; render(); });
-      }
-      render(); return;
-    }
-    if (a === 'approve' && c) {
-      decide(c, { action: 'approve' }, function () { c.status = 'approved'; c.decided_at = new Date().toISOString(); c.result = c.approve_result || 'Агент передал клиенту ваше согласие'; });
-      return;
-    }
-    if (a === 'refuse' && c) { ui.refusing[id] = true; render(); return; }
-    if (a === 'refuse-back') { delete ui.refusing[id]; render(); return; }
-    if (a === 'refuse-send' && c) {
-      var d = draft(c);
-      if (!String(d.reply || '').trim()) { toast('Напишите, что агент ответит клиенту'); var ta = $('.case.is-open textarea'); if (ta) ta.focus(); return; }
-      decide(c, { action: 'refuse', reason: d.reason, reply_text: d.reply }, function () {
-        c.status = 'refused'; c.decided_at = new Date().toISOString();
-        c.result = c.refuse_result || 'Агент ответил клиенту: ' + lcfirst(d.reply.length > 90 ? d.reply.slice(0, 88) + '…' : d.reply);
-      });
-      return;
-    }
-    if (a === 'answer' && c) {
-      var da = draft(c);
-      decide(c, { action: 'answer', reply_text: da.reply, add_to_help: !!da.help }, function () {
-        c.status = 'answered'; c.decided_at = new Date().toISOString();
-        c.result = da.help ? (c.answer_result_help || 'Агент передал клиенту ваш ответ и добавил его в справку') : (c.answer_result || 'Агент передал клиенту ваш ответ');
-        if (da.help && store.knowledge && store.knowledge.articles) store.knowledge.articles.unshift({ id: 'a-' + c.id, title: c.title.replace(/^Вопрос без ответа в справке:\s*/, ''), meta: 'Вы добавили сегодня в ' + hm() + ' из ответа клиенту', text: da.reply });
-      });
-      return;
-    }
-    if (a === 'rule' && c) {
-      var params = draft(c).rule || c.rule.params;
-      act('cases', 'POST', '/rules', { case_id: c.id, params: params }, function () {
-        if (store.knowledge && store.knowledge.rules) {
-          var txt = c.rule.text.map(function (p) { var m = /^\{(\w+)\}$/.exec(p); return m ? Number(params[m[1]]).toLocaleString('ru-RU') : p; }).join(' ');
-          store.knowledge.rules.unshift({ id: 'r-' + c.id, title: txt, meta: 'Такие просьбы агент согласует сам. Вы добавили правило сегодня в ' + hm() });
-        }
-      }).then(function () { ui.ruleDone[id] = true; toast('Правило добавлено, оно во вкладке «Знания»'); render(); }, function () {});
-      return;
-    }
-    if (a === 'rule-later') { ui.ruleDone[id] = true; render(); return; }
+    switch (a) {
+      /* Сегодня */
+      case 'pick': ui.sel = id; render(); return;
+      case 'kp-toggle': ui.kpClosed[id] = !ui.kpClosed[id]; render(); return;
+      case 'edit-kp': ui.kpEdit[id] = true; ui.discount[id] = (c.kp && c.kp.discount) || 0; render().then(function () { var f = $('#disc-' + id); if (f) { f.focus(); f.select(); } }); return;
+      case 'cancel-edit': ui.kpEdit[id] = false; ui.discount[id] = 0; render(); return;
+      case 'send-kp': return sendKp(c, b);
+      case 'help': var dh = draft(c); dh.help = b.getAttribute('aria-checked') !== 'true'; b.setAttribute('aria-checked', dh.help); return;
+      case 'answer': return answer(c, b);
+      case 'return': return giveBack(c, b);
+      case 'say': return say(c);
+      case 'more': ui.talkAll[id] = !ui.talkAll[id]; render(); return;
+      case 'goto-today': ui.sel = id; location.hash = '#today'; return;
 
-    if (a === 'jfilter') { ui.jFilter = b.getAttribute('data-key'); ui.jAll = false; history.replaceState(null, '', '#journal'); render(); return; }
-    if (a === 'jselect') { ui.jSel = id; render(); return; }
-    if (a === 'jmore') { ui.jAll = true; render(); return; }
-    if (a === 'jok' || a === 'jfix') {
-      var fix = a === 'jfix' ? ((ui.drafts['j-' + id] || {}).fix || '').trim() : '';
-      if (a === 'jfix' && !fix) return;
-      act('journal', 'POST', '/journal/' + encodeURIComponent(id) + '/review', fix ? { fix: fix } : { ok: true }, function () {
-        if (fix && store.knowledge && store.knowledge.fixes) {
-          var it = byId(jItems(), id);
-          store.knowledge.fixes.unshift({ id: 'f-' + id, title: fix, meta: 'Вы поправили сегодня в ' + hm() + (it && it.client ? ', разговор: ' + it.client : '') });
-        }
-      }).then(function () { reviewed(id); delete ui.drafts['j-' + id]; toast(fix ? 'Поправка сохранена, она во вкладке «Знания»' : 'Отметили: агент ответил верно'); render(); }, function () {});
-      return;
-    }
+      /* состояние агента */
+      case 'pause':
+        openDialog({ title: 'Поставить агента на паузу?', text: 'Новые чаты сразу пойдут менеджерам, без сводки агента. Включить агента можно тем же переключателем.', ok: 'Поставить на паузу',
+          onOk: function () { setStatus({ state: 'paused', since: storyNow('status') }, 'Агент на паузе: новые чаты идут менеджерам'); } });
+        return;
+      case 'resume': setStatus({ state: 'on' }, 'Агент снова отвечает клиентам'); return;
+      case 'limit':
+        var st = store.settings || SAMPLE.settings, spent = spend().spent;
+        openDialog({ title: 'Поднять лимит ' + ((store.stats || SAMPLE.stats).month_in || 'на месяц').replace(/^за /, 'на '), text: 'Потрачено ' + money(spent) + ' из ' + money(st.limit_rub) + '. Агент вернётся к чатам сразу после сохранения.',
+          body: '<label class="label"><span class="label__text">Новый лимит, ₽</span><input class="field" inputmode="numeric" data-dlg="limit" value="' + esc(group3(st.limit_rub + 500)) + '" aria-describedby="dlgErr"></label>', error: true, ok: 'Поднять лимит',
+          onOk: function () {
+            var v = num($('[data-dlg="limit"]').value);
+            if (!(v > spent)) { dialogError('Новый лимит должен быть больше ' + money(spent)); return false; }
+            act('settings', 'PUT', '/agent/settings', { limit_rub: Math.round(v) }, function () { st.limit_rub = Math.round(v); if (st.warn_rub >= st.limit_rub) st.warn_rub = Math.round(st.limit_rub * 0.8); })
+              .then(function () { setStatus({ state: 'on' }, 'Лимит поднят до ' + money(v) + ', агент снова отвечает'); });
+          } });
+        return;
+      case 'dlg-cancel': closeDialog(); return;
+      case 'dlg-ok': if (dialog && dialog.o.onOk && dialog.o.onOk() === false) return; closeDialog(); return;
 
-    var k = store.knowledge;
-    if (a === 'k-add') {
-      var p = byId(k.pending, id);
-      act('knowledge', 'POST', '/knowledge/pending/' + encodeURIComponent(id) + '/add', null, function () {
-        k.pending = without(k.pending, id);
-        k.articles.unshift({ id: 'a-' + id, title: p.title, meta: 'Вы добавили сегодня в ' + hm() + ' из ответа менеджера', text: p.answer || '' });
-      }).then(function () { toast('Ответ добавлен в справку'); render(); }, function () {});
-      return;
-    }
-    if (a === 'k-rule') {
-      var r = byId(k.rules, id), off = !r.off;
-      act('knowledge', 'POST', '/rules/' + encodeURIComponent(id), { enabled: !off }, function () { r.off = off; }).then(function () { toast(off ? 'Правило выключено, такие просьбы снова идут вам' : 'Правило снова работает'); render(); }, function () {});
-      return;
-    }
-    if (a === 'a-open') { ui.aOpen = ui.aOpen === id ? null : id; render(); return; }
-    if (a === 'a-save') {
-      var art = byId(k.articles, id), txt = (ui.drafts['a-' + id] || {}).text || '';
-      act('knowledge', 'PUT', '/knowledge/articles/' + encodeURIComponent(id), { text: txt }, function () { art.text = txt; art.meta = 'Вы обновили сегодня в ' + hm(); }).then(function () { ui.aOpen = null; toast('Статья сохранена'); render(); }, function () {});
-      return;
-    }
-    if (a === 'amore') { ui.aAll = true; render(); return; }
-    if (a === 'g-open') { ui.gapOpen = ui.gapOpen === id ? null : id; render(); return; }
-    if (a === 'g-save') {
-      var g = byId(k.gaps, id), gt = ((ui.drafts['g-' + id] || {}).text || '').trim(); if (!gt) return;
-      act('knowledge', 'POST', '/knowledge/articles', { title: g.title, text: gt }, function () {
-        k.gaps = without(k.gaps, id); k.articles.unshift({ id: 'a-' + id, title: g.title, meta: 'Вы добавили сегодня в ' + hm(), text: gt });
-      }).then(function () { ui.gapOpen = null; toast('Статья добавлена, агент будет отвечать по ней'); render(); }, function () {});
-      return;
-    }
-    if (a === 'f-del') {
-      act('knowledge', 'DELETE', '/knowledge/fixes/' + encodeURIComponent(id), null, function () { k.fixes = without(k.fixes, id); }).then(function () { toast('Поправка убрана'); render(); }, function () {});
-      return;
-    }
+      /* профиль */
+      case 'profile':
+        if (pop && pop.anchor === b) { closePop(); return; }
+        openPop(b, '<div class="menu__head"><span class="medium">Антон</span><span class="muted">Менеджер Store, до 18:00</span></div><div class="menu__sep"></div>' + menu([{ label: 'Выйти', act: 'logout' }]), { width: b.offsetWidth, align: 'right' });
+        return;
+      case 'logout':
+        closePop(true);
+        if (DEMO) { location.href = '../'; return; }
+        try { sessionStorage.removeItem('sl-manager-key'); } catch (err) {}
+        location.reload(); return;
 
-    if (a === 'pause') {
-      var want = b.getAttribute('data-on') === '1';
-      act('status', 'POST', '/agent/pause', { paused: want }, function (res) {
-        store.status = res && res.state ? res : { state: want ? 'paused' : 'on', since: want ? new Date().toISOString() : null };
-      }).then(function () { toast(want ? 'Агент на паузе, все чаты идут менеджерам' : 'Агент снова отвечает'); render(); }, function () {});
-      return;
-    }
-    if (a === 'edit') { ui.edit = b.getAttribute('data-key'); render().then(function () { var f = $('[data-edit]'); if (f) { f.focus(); f.select(); } }); return; }
-    if (a === 'edit-cancel') { ui.edit = null; render(); return; }
-    if (a === 'edit-save') {
-      var key = b.getAttribute('data-key'), f = $('[data-edit="' + key + '"]'), raw = f ? f.value.trim() : '';
-      var val = key === 'hours' ? raw : Number(raw.replace(/[^\d]/g, ''));
-      if (key !== 'hours' && !val) { toast('Введите число'); return; }
-      if (key === 'warn_rub' && val >= store.settings.limit_rub) { toast('Предупреждение должно быть меньше лимита'); return; }
-      var patch = {}; patch[key] = val;
-      saveSettings(patch).then(function () { ui.edit = null; toast('Сохранено'); render(); }, function () {});
+      /* Журнал */
+      case 'jday': if (pop && pop.anchor === b) { closePop(); return; } dayMenu(b); return;
+      case 'jday-pick': ui.jDay = new Date(+val); ui.jSel = null; closePop(false, true); render(); return;
+      case 'jcal':
+        var anchor = pop.anchor; ui.calMonth = new Date(ui.jDay.getFullYear(), ui.jDay.getMonth(), 1);
+        pop.el.innerHTML = calendar(ui.calMonth, ui.jDay); pop.el.setAttribute('role', 'dialog'); pop.el.style.width = ''; place();
+        var sd = $('.cal__day.is-selected', pop.el) || $('.cal__day:not(:disabled)', pop.el); if (sd) sd.focus();
+        pop.anchor = anchor; return;
+      case 'cal-prev': case 'cal-next':
+        ui.calMonth = new Date(ui.calMonth.getFullYear(), ui.calMonth.getMonth() + (a === 'cal-prev' ? -1 : 1), 1);
+        pop.el.innerHTML = calendar(ui.calMonth, ui.jDay); $('[data-act="' + a + '"]', pop.el).focus(); return;
+      case 'cal-day': ui.jDay = new Date(+val); ui.jSel = null; closePop(false, true); render(); return;
+      case 'jfilter': var key = b.getAttribute('data-key'); ui.jFilter = ui.jFilter === key ? null : key; ui.jSel = null; render(); return;
+      case 'jgroup': ui.jOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
+      case 'jpick': ui.jSel = id; render(); return;
+      case 'jfix': case 'jok': return review(a, id);
+
+      /* Знания */
+      case 'kgroup': ui.kOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
+      case 'kall': ui.kAll = true; render(); return;
+      case 'kpending': return pendingDialog(id);
+      case 'kgap': return gapDialog(id);
+      case 'kfix': return fixDialog(id);
+      case 'krule': return textDialog('rules', id, 'Правило агента', 'Сохранить правило', 'Правило сохранено, агент работает по нему со следующего обращения');
+      case 'karticle': return textDialog('articles', id, 'Статья справки', 'Сохранить статью', 'Статья сохранена, агент отвечает по новому тексту');
+
+      /* Агент */
+      case 'gap-link': location.hash = '#knowledge'; setTimeout(function () { gapDialog(id); }, 60); return;
+      case 'year':
+        if (pop && pop.anchor === b) { closePop(); return; }
+        var s = store.stats || {}, cur = ui.year || (s.years || [s.year])[0];
+        openPop(b, menu((s.years || [s.year]).map(function (y) { return { label: String(y), act: 'year-pick', value: y, check: y === cur }; })), { width: 160, align: 'right' }); return;
+      case 'year-pick': ui.year = +val; closePop(false, true); render(); return;
+      case 'set-days':
+        if (pop && pop.anchor === b) { closePop(); return; }
+        openPop(b, menu(['Пн–пт', 'Пн–сб', 'Каждый день'].map(function (d) { return { label: d, act: 'set-days-pick', value: d, check: store.settings.days === d }; })), { width: 180 }); return;
+      case 'set-days-pick': closePop(false, true); saveSettings({ days: val }, 'Часы менеджеров: ' + val + ', ' + store.settings.from + '–' + store.settings.to); return;
+      case 'set-from': case 'set-to':
+        if (pop && pop.anchor === b) { closePop(); return; }
+        timeMenu(b, a === 'set-from' ? 'from' : 'to'); return;
+      case 'set-time':
+        var parts = val.split('|'), p = {}; p[parts[0]] = parts[1]; closePop(false, true);
+        var ns = Object.assign({}, store.settings, p);
+        saveSettings(p, 'Часы менеджеров: ' + ns.days + ', ' + ns.from + '–' + ns.to); return;
+      case 'notify': var on = b.getAttribute('aria-checked') !== 'true'; saveSettings({ notify: on }, on ? 'Уведомления включены' : 'Уведомления выключены'); return;
+      case 'channel': if (store.settings.channel !== id) saveSettings({ channel: id }, 'Уведомления пойдут в ' + byId(store.settings.channels, id).name); return;
+      case 'model':
+        if (store.settings.model === id) return;
+        saveSettings({ model: id }, 'Модель изменена: ' + byId(store.settings.models, id).name); return;
     }
   });
 
+  /* ---------- действия «Сегодня» ---------- */
+  // в панели видны четыре последние реплики, остальные уходят под «Ещё N»
+  function pushTalk(c, line) {
+    c.talk = (c.talk || []).concat([line]);
+    var over = c.talk.length - 4;
+    if (over > 0) { c.talk_earlier = (c.talk_earlier || []).concat(c.talk.slice(0, over)); c.talk = c.talk.slice(over); }
+  }
+  // строка уезжает из очереди, потом открывается следующая
+  function leave(c, then) {
+    var row = $('.qrow[data-id="' + c.id + '"]');
+    var next = queue().filter(function (x) { return x.id !== c.id && !x.owner; })[0];
+    if (row) row.classList.add('is-leaving');
+    setTimeout(function () { ui.sel = next ? next.id : null; then(); }, row ? 240 : 0);
+  }
+  function sendKp(c) {
+    var d = ui.kpEdit[c.id] ? ui.discount[c.id] || 0 : 0;
+    ui.busy[c.id] = true; render();
+    act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/decision', { action: 'approve', discount_percent: d || undefined }, function (res) {
+      if (res && res.id) Object.assign(c, res);
+      c.status = 'done'; c.done_label = c.done_label || 'КП отправлено в ' + storyNow('cases');
+      if (c.kp && d) c.kp.discount = d;
+      if (isLocal('cases')) c.effect = (silent() ? 'Клиент получил' : 'Агент прислал') + ' в чат **КП файлом PDF**.' + (c.kp && c.kp.valid_until ? '\nЦена в КП действует **до ' + c.kp.valid_until + '**.' : '');
+      if (c.sent && c.sent.talk) pushTalk(c, c.sent.talk);
+    }).then(function () {
+      delete ui.busy[c.id]; ui.kpEdit[c.id] = false;
+      toast(d ? 'КП со скидкой ' + String(d).replace('.', ',') + '% отправлено клиенту в чат' : 'КП отправлено клиенту в чат');
+      leave(c, render);
+    }, function () { delete ui.busy[c.id]; render(); });
+  }
+  function answer(c) {
+    var d = draft(c), text = String(d.reply || '').trim(), help = c.help_option && d.help !== false;
+    if (!text) return;
+    ui.busy[c.id] = true; render();
+    act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/decision', { action: 'answer', reply_text: text, add_to_help: help }, function (res) {
+      if (res && res.id) Object.assign(c, res);
+      if (!isLocal('cases')) return; // сервер закрывает обращение сразу: в чат менеджер не входит
+      c.status = 'in-chat';
+      pushTalk(c, { who: 'me', text: text, _new: true });
+      if (c.in_chat) {
+        c.steps = copy(c.in_chat.steps);
+        if (text !== c.reply_draft) c.steps[c.steps.length - 1] = [storyNow('cases'), 'вы ответили клиенту'];
+      }
+      if (help && store.knowledge && store.knowledge.articles) store.knowledge.articles.unshift({ id: 'a-' + c.id, title: c.title, meta: 'Добавлена сегодня в ' + storyNow('cases') + ' из вашего ответа', text: text });
+    }).then(function () {
+      delete ui.busy[c.id]; delete ui.drafts[c.id];
+      if (!isLocal('cases')) {
+        c.status = 'done'; c.done_label = 'Ответ отправлен в ' + storyNow('cases');
+        toast('Ответ отправлен клиенту в чат'); leave(c, render); return;
+      }
+      toast(help ? 'Ответ отправлен клиенту и добавлен в справку' : 'Ответ отправлен клиенту, вы в чате');
+      render();
+      // клиент отвечает: видно, что разговор живой и агент ждёт, пока ему вернут чат
+      if (c.in_chat && c.in_chat.client_reply) {
+        setTimeout(function () { ui.typing[c.id] = true; if (ui.tab === 'today' && ui.sel === c.id) render(); }, 900);
+        setTimeout(function () {
+          ui.typing[c.id] = false; if (c.status !== 'in-chat') return;
+          pushTalk(c, { who: 'client', text: c.in_chat.client_reply, _new: true }); c.first = c.in_chat.client_reply;
+          if (ui.tab === 'today') render();
+        }, 2600);
+      }
+    }, function () { delete ui.busy[c.id]; render(); });
+  }
+  function giveBack(c) {
+    act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/return', null, function () {
+      c.status = 'done'; c.done_label = 'Вернули агенту в ' + storyNow('cases');
+      c.effect = 'Разговор снова ведёт агент.';
+      c.talk.forEach(function (l) { delete l._new; });
+    }).then(function () {
+      toast(c.id === 'discount' ? 'Разговор у агента: он соберёт КП со скидкой 8% и пришлёт вам на проверку' : 'Разговор вернулся к агенту');
+      leave(c, render);
+    }, function () {});
+  }
+  function say(c) {
+    var d = ui.drafts['say-' + c.id], text = d && d.say.trim();
+    if (!text) return;
+    act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/messages', { text: text }, function () {
+      c.talk.forEach(function (l) { delete l._new; });
+      pushTalk(c, { who: 'me', text: text, _new: true });
+    }).then(function () { d.say = ''; render().then(function () { var b = $('#talk-' + c.id); if (b) b.lastElementChild && b.lastElementChild.scrollIntoView({ block: 'nearest' }); }); }, function () {});
+  }
+  function setStatus(next, msg) {
+    act('status', 'POST', '/agent/pause', { paused: next.state === 'paused' }, function () { store.status = next; }).then(function () { toast(msg); renderTop(); render(); }, function () {});
+  }
+
+  /* ---------- проверка разговора из журнала ---------- */
+  function review(a, id) {
+    var it = jItemsFor(ui.jDay).filter(function (i) { return i.id === id; })[0], c = it && it.detail;
+    var fix = a === 'jfix' ? ((ui.drafts['fix-' + id] || {}).fix || '').trim() : '';
+    if (!c || (a === 'jfix' && !fix)) return;
+    act('journal', 'POST', '/journal/' + encodeURIComponent(id) + '/review', fix ? { fix: fix } : { ok: true }, function () {
+      it.review = false; it.status = { tone: 'success', text: fix ? 'Поправка сохранена' : 'Проверено' };
+      c.status = 'done'; c.done_label = fix ? 'Поправка сохранена в ' + storyNow('journal') : 'Проверено в ' + storyNow('journal');
+      c.effect = fix ? 'Агент запомнил поправку: «' + fix + '». Она во вкладке «Знания».' : 'Вы отметили, что агент ответил верно.';
+      if (fix && store.knowledge && store.knowledge.fixes) store.knowledge.fixes.unshift({ id: 'f-' + id, title: fix, meta: 'Вы поправили сегодня, разговор с ' + it.client });
+    }).then(function () { delete ui.drafts['fix-' + id]; toast(fix ? 'Поправка сохранена, она во вкладке «Знания»' : 'Отметили: агент ответил верно'); render(); }, function () {});
+  }
+
+  /* ---------- окна «Знаний» ---------- */
+  function kStore() { return store.knowledge || (store.knowledge = copy(SAMPLE.knowledge)); }
+  function addArticle(title, text, how) {
+    var k = kStore(); k.articles = k.articles || [];
+    k.articles.unshift({ id: 'a-' + Date.now(), title: title, meta: how + ' сегодня', text: text });
+  }
+  function pendingDialog(id) {
+    var k = kStore(), p = byId(k.pending, id); if (!p) return;
+    openDialog({ title: 'Добавить ответ в справку', text: p.title + '\n' + p.meta + '. Текст можно поправить, агент будет отвечать по нему сам.',
+      body: '<textarea class="field" rows="4" data-dlg="text" aria-label="Текст ответа">' + esc(p.text || '') + '</textarea>', ok: 'Добавить в справку',
+      onOk: function () {
+        var txt = $('[data-dlg="text"]').value.trim(); if (!txt) { $('[data-dlg="text"]').classList.add('is-error'); return false; }
+        act('knowledge', 'POST', '/knowledge/pending/' + encodeURIComponent(id) + '/add', { text: txt }, function () { k.pending = without(k.pending, id); addArticle(p.title, txt, 'Добавлена'); })
+          .then(function () { toast('Ответ добавлен в справку'); render(); }, function () {});
+      } });
+  }
+  function gapDialog(id) {
+    var k = kStore(), g = byId(k.gaps, id); if (!g) return;
+    openDialog({ title: 'Дописать справку: ' + g.title, text: g.share + ' передач менеджеру. Напишите, что агент должен отвечать на такие вопросы.',
+      body: '<textarea class="field" rows="4" data-dlg="text" data-draft="gap" data-id="gap-' + esc(id) + '" placeholder="Например: цену серверной лицензии называет менеджер, агент собирает число пользователей и срок" aria-label="Текст статьи"></textarea>', ok: 'Добавить в справку', okDisabled: true,
+      onOk: function () {
+        var txt = $('[data-dlg="text"]').value.trim(); if (!txt) return false;
+        act('knowledge', 'POST', '/knowledge/articles', { title: g.title, text: txt }, function () { k.gaps = without(k.gaps, id); addArticle(g.title, txt, 'Добавлена'); })
+          .then(function () { toast('Статья добавлена, агент будет отвечать по ней'); render(); }, function () {});
+      } });
+    var ta = $('[data-dlg="text"]'), ok = $('[data-act="dlg-ok"]');
+    ta.addEventListener('input', function () { ok.disabled = !ta.value.trim(); });
+  }
+  function fixDialog(id) {
+    var k = kStore(), f = byId(k.fixes, id); if (!f) return;
+    openDialog({ title: 'Поправка из проверки', text: f.meta + '. Сделайте её правилом, и агент будет работать по ней во всех разговорах.',
+      body: '<textarea class="field" rows="3" data-dlg="text" aria-label="Текст правила">' + esc(f.title) + '</textarea>', ok: 'Сделать правилом',
+      extra: '<button class="btn btn--grey" type="button" data-act="dlg-extra" style="margin-right:auto">Убрать</button>',
+      onOk: function () {
+        var txt = $('[data-dlg="text"]').value.trim(); if (!txt) return false;
+        act('knowledge', 'POST', '/knowledge/fixes/' + encodeURIComponent(id) + '/rule', { text: txt }, function () { k.fixes = without(k.fixes, id); k.rules.unshift({ id: 'r-' + id, title: txt, meta: 'Из проверки разговора, добавлено сегодня' }); })
+          .then(function () { toast('Правило добавлено, агент работает по нему'); render(); }, function () {});
+      } });
+    $('[data-act="dlg-extra"]').addEventListener('click', function () {
+      act('knowledge', 'DELETE', '/knowledge/fixes/' + encodeURIComponent(id), null, function () { k.fixes = without(k.fixes, id); })
+        .then(function () { closeDialog(); toast('Поправка убрана'); render(); }, function () {});
+    });
+  }
+  function textDialog(list, id, title, okText, done) {
+    var k = kStore(), x = byId(k[list], id); if (!x) return;
+    var isRule = list === 'rules';
+    openDialog({ title: title, text: isRule ? x.meta : x.title + '. ' + x.meta + '.',
+      body: '<textarea class="field" rows="' + (isRule ? 3 : 5) + '" data-dlg="text" placeholder="' + (isRule ? '' : 'Текст статьи, по нему отвечает агент') + '" aria-label="' + esc(title) + '">' + esc(isRule ? x.title : x.text || '') + '</textarea>', ok: okText,
+      onOk: function () {
+        var txt = $('[data-dlg="text"]').value.trim(); if (isRule && !txt) return false;
+        act('knowledge', 'PUT', '/knowledge/' + list + '/' + encodeURIComponent(id), { text: txt }, function () { if (isRule) x.title = txt; else x.text = txt; x.meta = isRule ? 'Вы изменили сегодня' : 'Обновлена сегодня'; })
+          .then(function () { toast(done); render(); }, function () {});
+      } });
+  }
+
   /* ---------- обновление с сервера ---------- */
-  // на «Сегодня» новые случаи приходят без перезагрузки; пока менеджер печатает, экран не трогаем
+  // на «Сегодня» новые случаи приходят без перезагрузки; пока менеджер печатает или открыто окно, экран не трогаем
   var lastCases = '';
   function refresh() {
-    if (DEMO) return;
-    var busy = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-    call('GET', '/agent/status').then(function (s) { store.status = s; store.sample.status = false; renderTop(); }, function () { store.sample.status = true; });
-    if (ui.tab !== 'today' && ui.tab !== 'agent') return;
+    if (DEMO || store.sample.cases) return;
+    if (ui.tab !== 'today' && ui.tab !== 'journal') return;
+    var busy = pop || dialog || (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName));
     call('GET', '/cases').then(function (d) {
-      var sig = JSON.stringify(d); store.sample.cases = false;
+      var sig = JSON.stringify((d.cases || []).map(function (c) { return c.id + c.version + c.status; }));
       if (sig === lastCases) return; lastCases = sig;
-      var events = {}; cases().forEach(function (c) { if (c.events) events[c.id] = c.events; });
-      store.cases = d; cases().forEach(function (c) { if (!c.events && events[c.id]) c.events = events[c.id]; });
-      if (ui.tab === 'today' && !busy) render(); else renderTop();
+      var old = {}; cases().forEach(function (c) { old[c.id] = c; });
+      store.cases = d;
+      cases().forEach(function (c) { var o = old[c.id]; if (o) ['talk', 'talk_earlier', 'steps', 'cost'].forEach(function (k) { if (c[k] == null && o[k] != null) c[k] = o[k]; }); });
+      if (!busy) render(); else renderTop();
     }, function () {});
   }
 
   window.addEventListener('hashchange', route);
-  if (DEMO) store.status = copy(SAMPLE.status);
-  else call('GET', '/agent/status').then(function (s) { store.status = s; renderTop(); }, function () { store.status = { state: 'on' }; store.sample.status = true; });
-  loadToday().then(function () { lastCases = DEMO ? '' : JSON.stringify(store.cases); route(); });
+  store.status = DEMO ? copy(SAMPLE.status) : { state: 'on' };
+  if (!DEMO) store.sample.status = true;
+  if (VARIANT === 'limit') store.status = { state: 'limit', since: '10:07' };
+  if (VARIANT === 'paused') store.status = { state: 'paused', since: '10:07' };
+  loadToday().then(function () {
+    if (VARIANT === 'empty') cases().forEach(function (c) { c.status = 'done'; c.done_label = 'Закрыт'; });
+    route();
+  });
   setInterval(refresh, 5000);
 })();

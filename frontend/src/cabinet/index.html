@@ -6,6 +6,8 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Кабинет менеджера: агент поддержки Softline Store</title>
 <link rel="icon" href="../favicon/icon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/roboto-cyrillic-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/roboto-cyrillic-500-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="cabinet.css">
 </head>
 <body>
@@ -16,15 +18,14 @@
       <span class="header__divider" aria-hidden="true"></span>
       <span class="header__title">Кабинет менеджера</span>
     </div>
-    <div class="header__user">
-      <span class="avatar avatar--40" aria-hidden="true">А</span>
-      <div class="header__who"><span class="header__name">Антон</span><span class="header__role">Менеджер Store, до 18:00</span></div>
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6L8 10L12 6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke="#85828C"/></svg>
-    </div>
+    <button class="user" type="button" id="user" aria-haspopup="menu" aria-expanded="false" data-act="profile">
+      <span class="avatar avatar--staff" aria-hidden="true">А</span>
+      <span class="user__who"><span class="user__name">Антон</span><span class="user__role">Менеджер Store, до 18:00</span></span>
+      <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6L8 10L12 6" stroke="#85828C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </header>
   <main class="body">
-    <div class="canvas" id="canvas">
-      <div id="notice"></div>
+    <div class="canvas">
       <div class="canvas__top">
         <nav class="tabs" aria-label="Разделы кабинета">
           <a class="tab" href="#today" data-tab="today">Сегодня<span class="counter" id="todayCounter" hidden></span></a>
@@ -32,13 +33,15 @@
           <a class="tab" href="#knowledge" data-tab="knowledge">Знания</a>
           <a class="tab" href="#agent" data-tab="agent">Агент</a>
         </nav>
-        <span id="agentBadge"></span>
+        <div id="agentStatus"></div>
       </div>
-      <div id="view" aria-live="polite"></div>
+      <div class="notice" id="notice" role="status" hidden></div>
+      <div id="view"></div>
     </div>
   </main>
 </div>
-<div class="toast" id="toast" role="status"></div>
+<div class="layer" id="layer"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="../config.js"></script>
 <script src="../api.js"></script>
 <script src="demo-data.js"></script>

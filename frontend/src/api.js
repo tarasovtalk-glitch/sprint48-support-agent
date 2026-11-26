@@ -115,76 +115,105 @@
       throw e;
     });
   }
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+  function clock(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.getHours() + ':' + two(d.getMinutes()); }
+  function money(rubles) { return String(Math.round(rubles)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
+  // две буквы названия без формы собственности: ООО «Северная линия» → СЛ. Посетителя сайта сервер не знает по имени
+  function initials(who) {
+    var s = String(who || '').replace(/^(ООО|ОАО|ЗАО|ПАО|АО|ИП|НКО)\s+/i, '').replace(/[«»"']/g, '').trim();
+    if (!s || who === 'Посетитель сайта') return 'К';
+    return s.split(/\s+/).slice(0, 2).map(function (w) { return w.charAt(0); }).join('').toUpperCase();
+  }
+  // короткое имя позиции для строки очереди: до первой цифры, скобки или тире
+  function shortName(name) {
+    var s = String(name || 'позиция каталога').split(/\s[\d(–—-]|,/)[0].trim();
+    return s.length > 36 ? s.slice(0, 35).replace(/\s+\S*$/, '') + '…' : s;
+  }
 
-  // почему агент позвал менеджера: заголовок карточки, сводка и что произойдёт после ответа
+  // почему агент позвал менеджера: заголовок карточки и одна фраза о причине
   var REASON = {
-    quote_review: { title: 'Проверить КП' },
-    discount_over_limit: { title: 'Клиент просит скидку больше 5%', advice: 'Агент предложил купон 5% по правилу магазина, клиент просит больше. Решите, что ответить: агент передаст ваш ответ в чат.' },
-    customer_request: { title: 'Клиент просит оператора', advice: 'Клиент попросил живого человека или пишет о тендере. Переписка ниже, ответьте ему в тот же чат.' },
-    server_license: { title: 'Лицензия на сервер', advice: 'Клиенту нужна серверная лицензия, агент не называл её цену. Напишите клиенту цену и условия.' },
-    price_confirmation: { title: 'Уточнить цену', advice: 'В каталоге нет цены или позиция недоступна. Напишите клиенту цену и срок.' },
-    catalog_unavailable: { title: 'Позиция недоступна в каталоге', advice: 'Агент не нашёл позицию в каталоге. Ответьте клиенту, что предложить вместо неё.' }
+    discount_over_limit: { title: 'Клиент просит скидку больше 5%', why: 'Агент может дать только купон 5%, клиент просит больше.' },
+    customer_request: { title: 'Клиент просит менеджера', why: 'Клиент попросил живого человека или пишет о тендере.' },
+    server_license: { title: 'Лицензия на сервер', why: 'Цену серверной лицензии агент не называет.' },
+    price_confirmation: { title: 'Уточнить цену', why: 'В каталоге нет цены или позиция недоступна.' },
+    catalog_unavailable: { title: 'Позиции нет в каталоге', why: 'Агент не нашёл позицию, клиенту нужна замена.' }
   };
-  var STATUS = { pending: 'waiting', approved: 'approved', rejected: 'refused', open: 'waiting' };
+  var ANSWER_EFFECT = 'Ответ уйдёт клиенту в этот же чат **от имени менеджера**, обращение закроется.';
+  // срок ответа: агент обещает клиенту ответ менеджера через 2 минуты после последней реплики
+  var ANSWER_MIN = 2;
 
-  // реквизиты покупателя из КП: ИНН и КПП рядом, через запятую
   function requisites(q) { return [q.inn ? 'ИНН ' + q.inn : '', q.kpp ? 'КПП ' + q.kpp : ''].filter(Boolean).join(', '); }
+  function sourceDate(s) { var d = s && new Date(s); return d && !isNaN(d) ? two(d.getDate()) + '.' + two(d.getMonth() + 1) + '.' + d.getFullYear() : ''; }
 
+  // случай сервера {id, version, state, reason, quote, created, updated, first_client_message} → карточка кабинета
   function toCase(v) {
-    var q = v.quote, why = REASON[v.reason] || { title: 'Запрос клиента', advice: 'Агент передал разговор менеджеру. Переписка ниже.' };
+    var q = v.quote, why = REASON[v.reason] || { title: 'Запрос клиента', why: 'Агент передал разговор менеджеру.' };
     var who = q && q.customer ? q.customer : 'Посетитель сайта';
-    var c = { id: v.id, version: v.version, status: STATUS[v.state] || 'waiting', reason: v.reason, decided_at: null, decided_by: null, result: null };
+    var at = utc(v.updated || v.created);
+    var c = {
+      id: v.id, version: v.version, reason: v.reason, status: v.state === 'pending' ? 'waiting' : 'done',
+      client: who, initials: initials(who), first: v.first_client_message || '',
+      deadline: at && !isNaN(Date.parse(at)) ? new Date(Date.parse(at) + ANSWER_MIN * 60000).toISOString() : null,
+      steps: null, talk: null, talk_earlier: [], help_option: false, can_discount: false
+    };
     if (q) {
-      var offer = q.offer || {};
-      c.kind = 'approve';
-      c.title = who + ': КП, ' + (offer.name || 'позиция каталога');
+      var offer = q.offer || {}, qty = q.quantity || 1, price = offer.price_kopecks != null ? offer.price_kopecks / 100 : (q.amount_kopecks || 0) / 100 / qty;
+      c.kind = 'quote'; c.deadline_label = 'Отправить до';
+      c.queue_title = 'КП на ' + shortName(offer.name);
+      c.title = who + ': ' + c.queue_title;
       c.amount_rub = rub(q.amount_kopecks || 0);
-      c.desc = [q.quantity ? q.quantity + ' шт.' : '', requisites(q), q.payment_terms || '', q.vat_status || ''].filter(Boolean).join(' · ');
-      c.approve_label = 'Отправить КП в чат';
-      c.effect = 'Клиент получит PDF коммерческого предложения в этом же чате';
-      c.refuse_reasons = ['Позиция не подходит под задачу клиента'];
-      c.refuse_reply = 'Проверили запрос: эта позиция вам не подойдёт. Подскажу другой вариант здесь же, в чате.';
+      c.facts = [['Клиент', who], ['Сумма', money(c.amount_rub)]];
+      c.kp = {
+        buyer: [who, requisites(q)].filter(Boolean).join(', '), vat_rate: 0,
+        items: [{ name: offer.name || 'Позиция каталога', qty: qty, price: price, note: q.requested_users && q.requested_users !== qty ? 'Клиент просил ' + q.requested_users + ', в КП ' + qty + ' по фасовке каталога' : '' }],
+        terms: [['Оплата', q.payment_terms || 'Предоплата'], ['НДС', q.vat_status || 'Уточняет менеджер']].concat(q.source_date ? [['Цена каталога на', sourceDate(q.source_date)]] : [])
+      };
+      c.effect = 'После отправки клиент получит в этот же чат **КП файлом PDF**.';
     } else {
-      c.kind = 'answer';
-      c.title = why.title;
-      c.desc = who;
-      c.advice = why.advice;
-      c.help_option = false;
-      c.effect = 'Агент передаст ваш ответ клиенту в тот же чат';
+      c.kind = 'answer'; c.deadline_label = 'Ответ до';
+      c.queue_title = c.title = why.title;
+      c.facts = [['Клиент', who]];
+      c.reply_draft = '';
+      c.effect = why.why + '\n' + ANSWER_EFFECT;
     }
     return c;
   }
-  function decidedCase(c, v) {
-    var next = {}; for (var k in c) next[k] = c[k];
-    next.version = v.version; next.status = STATUS[v.state] || c.status; next.decided_at = nowIso();
-    if (c.kind === 'answer' && v.state !== 'pending') next.status = 'answered';
-    if (next.status === 'approved') next.result = v.document_url ? 'КП отправлено клиенту в чат' : 'Ответ отправлен клиенту';
-    if (next.status === 'refused') next.result = 'Отказано. Клиент получил ответ в чате' + (v.decision_note ? ': ' + v.decision_note : '');
-    if (next.status === 'answered') next.result = 'Ответ отправлен клиенту: ' + (v.decision_note || '');
-    return next;
+  // решённый случай остаётся в журнале закрытой карточкой
+  function closeCase(c, v) {
+    c.version = v.version; c.status = 'done'; c.done_tone = v.state === 'rejected' ? 'neutral' : 'success';
+    var note = String(v.decision_note || '').trim(), at = v.updated ? ' в ' + clock(utc(v.updated)) : '';
+    if (v.state === 'approved') {
+      c.done_label = (c.kind === 'quote' ? 'КП отправлено' : 'Ответ отправлен') + at;
+      c.effect = c.kind === 'quote' ? 'Клиент получил в чат **КП файлом PDF**.' : 'Менеджер ответил клиенту' + (note ? ': «' + note + '»' : '.');
+    } else if (v.state === 'rejected') {
+      c.done_label = 'Отказано' + at;
+      c.effect = 'Менеджер отказал' + (note ? ': «' + note + '»' : '.');
+    } else {
+      c.done_label = 'Отвечал агент';
+      c.effect = 'Агент отвечал клиенту сам, менеджер не понадобился.';
+    }
+    return c;
   }
 
   var known = {}, attempts = {};
   function casesList() {
     return manager('GET', '/manager/cases').then(function (r) {
-      // тот же случай отдаём тем же объектом: кабинет дописывает в него переписку, пока идёт обновление очереди
+      // тот же случай отдаём тем же объектом: кабинет дописывает в него переписку и шаги
       var list = (r.cases || []).map(function (v) {
-        var c = toCase(v), was = known[c.id];
-        if (was && was.version === c.version && was.status === c.status) return was;
-        known[c.id] = c; return c;
+        var was = known[v.id];
+        if (was && was.version === v.version) return was;
+        return (known[v.id] = toCase(v));
       });
-      // решённые здесь за сессию остаются на экране, сервер отдаёт только ожидающие
-      Object.keys(known).forEach(function (id) {
-        if (known[id].status !== 'waiting' && !list.some(function (c) { return c.id === id; })) list.push(known[id]);
-      });
-      // статистики дня в API нет: блок «Агент сегодня закрыл сам…» не показываем
-      return { cases: list, review: [], today: null };
+      // решённые здесь остаются в журнале до перезагрузки, сервер в очереди отдаёт только ожидающие
+      Object.keys(known).forEach(function (id) { if (known[id].status !== 'waiting' && !list.some(function (c) { return c.id === id; })) list.push(known[id]); });
+      return { cases: list, recent: [] };
     });
   }
 
-  // approve: КП уходит клиенту (или ответ менеджера), reject: отказ с текстом. reply необязателен, до 400 знаков
+  // кабинет шлёт {action: approve | answer, reply_text}. Сервер знает два ответа: approve с необязательным текстом и reject
   function decide(id, body) {
     var c = known[id]; if (!c) return Promise.reject(fail(404));
+    if (body.discount_percent) return Promise.reject(fail(404)); // правки скидки в API пока нет
     var choice = body.action === 'refuse' ? 'reject' : 'approve';
     var reply = String(body.reply_text || '').trim().slice(0, 400);
     // повтор после обрыва связи идёт с тем же request_id, сервер не решит дважды
@@ -193,103 +222,78 @@
     var data = { choice: choice, version: c.version, request_id: rid };
     if (reply) data.reply = reply;
     return manager('POST', '/manager/cases/' + encodeURIComponent(id) + '/decision', data).then(function (v) {
-      var next = decidedCase(c, v); known[id] = next; return next;
-    }, function (e) {
-      if (e.status === 409) toastText('Обращение уже изменилось. Обновите страницу');
-      throw e;
+      v.updated = nowIso(); closeCase(c, v); return c;
     });
   }
 
-  // «Как шёл разговор»: реплики клиента, агента и менеджера с временем. Имени клиента сервер не знает.
-  // Журнал обращения (GET /manager/cases/{id}/journal) добавляет под репликой агента его шаги: какой инструмент
-  // выбрала модель (model_tool_executed), что сделал сервер (поиск, реестр, расчёт, передача), и расход модели (usage)
-  var ACTOR = { client: 'Клиент', manager: 'Менеджер' };
-  var TOOL = { clarify_requirements: 'уточнение требований', search_catalog: 'поиск по каталогу', check_registry: 'проверка реестра',
-    draft_quote: 'черновик КП', contact_manager: 'передача менеджеру' };
-  function rubText(kopecks) { return (Math.round(+kopecks) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, '\u00a0') + '\u00a0₽'; }
-  function step(e) {
+  // шаги агента из журнала обращения: время и что сделано, одной строкой на событие
+  var TOOL = { clarify_requirements: 'уточнил требования', search_catalog: 'искал в каталоге', check_registry: 'проверил реестр', draft_quote: 'собрал черновик КП', contact_manager: 'передал менеджеру' };
+  function stepText(e) {
     var d = e.detail || '';
     switch (e.event) {
-      case 'model_tool_executed': return { key: d, model: true, text: TOOL[d] || d };
-      case 'catalog_search': return { key: 'search_catalog', text: 'поиск по каталогу' };
-      case 'registry_lookup': return { key: 'check_registry', text: 'проверка реестра' };
-      case 'quote_amount_calculated': return { key: 'calc', text: 'расчёт ' + rubText(d) };
-      case 'price_calculated': return { key: 'calc', text: 'расчёт цены' };
-      case 'sent_to_manager': return { key: 'contact_manager', text: d === 'quote_review' ? 'КП передано менеджеру на проверку'
-        : 'передача менеджеру' + (REASON[d] ? ': ' + REASON[d].title.charAt(0).toLowerCase() + REASON[d].title.slice(1) : '') };
-      case 'demo_coupon_offered': return { key: 'coupon', text: 'купон ' + d + '%' };
-      case 'model_unavailable': return { key: 'down', text: 'модель не ответила, ответ по правилам' };
-      case 'model_budget_exceeded': return { key: 'limit', text: 'лимит модели исчерпан, ответ по правилам' };
+      case 'opened': return 'клиент открыл чат';
+      case 'catalog_search': return 'искал в каталоге';
+      case 'registry_lookup': return 'проверил реестр';
+      case 'quote_amount_calculated': return 'посчитал сумму ' + money(+d / 100);
+      case 'price_calculated': return 'посчитал цену';
+      case 'sent_to_manager': return d === 'quote_review' ? 'передал КП менеджеру на проверку' : 'передал менеджеру' + (REASON[d] ? ': ' + REASON[d].title.charAt(0).toLowerCase() + REASON[d].title.slice(1) : '');
+      case 'demo_coupon_offered': return 'предложил купон ' + d + '%';
+      case 'model_unavailable': return 'модель не ответила, ответил по правилам';
+      case 'model_budget_exceeded': return 'лимит модели потрачен, ответил по правилам';
+      case 'manager_decision': return d === 'rejected' ? 'менеджер отказал' : 'менеджер ответил';
+      case 'catalog_quote_sent': return 'КП ушло клиенту в чат';
+      case 'model_tool_executed': return TOOL[d] || '';
     }
-    return null;
+    return '';
   }
-  // шаги одной реплики: «Модель выбрала: черновик КП. Сделано: расчёт 70 300 ₽, передача менеджеру: проверить КП»
-  function stepsLine(list) {
-    var chosen = {}, model = [], done = [];
-    list.forEach(function (s) { if (s.model && !chosen[s.key]) { chosen[s.key] = true; model.push(s.text); } });
-    list.forEach(function (s) { if (!s.model && !chosen[s.key] && done.indexOf(s.text) < 0) done.push(s.text); });
-    return (model.length ? 'Модель выбрала: ' + model.join(', ') + '.' : '') + (model.length && done.length ? ' ' : '') + (done.length ? 'Сделано: ' + done.join(', ') : '');
+  function toSteps(events) {
+    var out = [];
+    (events || []).forEach(function (e) {
+      var text = stepText(e), at = clock(utc(e.created));
+      if (!text || (out.length && out[out.length - 1][1] === text)) return;
+      out.push([at, text]);
+    });
+    return out;
   }
-  function toEvents(messages, journal) {
-    var steps = (journal || []).map(function (e) { var s = step(e); if (s) s.at = e.created || ''; return s; }).filter(Boolean), k = 0;
+  function toTalk(messages) {
     return (messages || []).map(function (m) {
-      var ev = { actor: m.role, name: ACTOR[m.role], text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : ''), time: utc(m.created) };
-      if (m.role !== 'client') {
-        // шаги, записанные до этой реплики (время в журнале с точностью до секунды)
-        var mine = []; while (k < steps.length && steps[k].at <= (m.created || '')) mine.push(steps[k++]);
-        var line = stepsLine(mine); if (line) ev.steps = line;
-      }
-      return ev;
+      var who = m.role === 'client' ? 'client' : m.role === 'manager' ? 'manager' : 'agent';
+      return { who: who, name: who === 'manager' ? 'Менеджер' : undefined, text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : '') };
     });
   }
   function events(id) {
     var path = '/manager/cases/' + encodeURIComponent(id);
     return manager('GET', path + '/journal').then(function (r) {
-      var usage = r.usage || [], cost = 0;
-      usage.forEach(function (u) { cost += +u.cost_microrubles || 0; });
-      return { events: toEvents(r.messages, r.events), model_calls: usage.length, model_cost_rub: cost / 1e6 };
+      var cost = 0; (r.usage || []).forEach(function (u) { cost += +u.cost_microrubles || 0; });
+      var res = { steps: toSteps(r.events), talk: toTalk(r.messages) };
+      if ((r.usage || []).length) res.cost = [['Работа агента', (cost / 1e6).toFixed(2).replace('.', ',') + ' ₽'], ['Вызовов модели', String(r.usage.length)]];
+      return res;
     }, function (e) {
       if (e.status !== 404) throw e;
       // сервер без журнала обращения: только переписка
-      return manager('GET', path + '/messages').then(function (r) { return { events: toEvents(r.messages) }; });
+      return manager('GET', path + '/messages').then(function (r) { return { steps: [], talk: toTalk(r.messages) }; });
     });
   }
 
-  // Журнал: все разговоры стенда, новые сверху. Время разговора в списке сервер пока не отдаёт
-  var STATE_SIDE = { open: 'идёт разговор', pending: 'ждёт решения', rejected: 'отказано' };
+  // Журнал: все разговоры стенда. Ждущие решения ведут в «Сегодня», остальные открываются закрытой карточкой
+  var jKnown = {};
   function toJournal(v) {
-    var q = v.quote, why = REASON[v.reason], offer = (q && q.offer) || {};
-    var who = q && q.customer ? q.customer : 'Посетитель сайта';
-    var it = { id: v.id, channel: 'чат', client: who, review: false, open: v.state === 'open' || v.state === 'pending' };
-    // название позиции из фида длинное: в строке и заголовке только клиент и количество, позиция строкой ниже заголовка
-    // первое сообщение клиента отличает разговоры без КП и без причины передачи друг от друга
+    var c = toCase(v), q = v.quote;
+    var it = { id: v.id, time: utc(v.updated || v.created), client: c.client, inn: q ? [q.inn, q.kpp].filter(Boolean).join(' ') : '' };
     var first = String(v.first_client_message || '').replace(/\s+/g, ' ').trim();
     if (first.length > 64) first = first.slice(0, 63).replace(/\s+\S*$/, '') + '…';
-    it.title = q ? who + ': КП' + (q.quantity ? ' на ' + q.quantity + ' шт.' : '') : why ? why.title : first ? '«' + first + '»' : 'Разговор с агентом';
-    // в карточке справа реплика видна в переписке, заголовок её не повторяет
-    if (first) { it.first = first; if (!q && !why) it.detail_title = 'Разговор с агентом'; }
-    if (q) { it.client = [offer.name || 'Позиция каталога', requisites(q)].filter(Boolean).join(' · '); it.inn = [q.inn, q.kpp].filter(Boolean).join(' '); }
-    it.meta = (q ? 'Проверка КП' : why ? who : 'Агент отвечал сам') + ' · чат';
-    if (q && q.amount_kopecks != null) it.value_rub = rub(q.amount_kopecks);
-    it.status = v.state === 'approved' ? (q ? 'КП отправлено' : 'ответ отправлен') : STATE_SIDE[v.state] || '';
-    it.badge = v.state === 'pending' ? { tone: 'warning', text: 'Ждёт вашего решения во вкладке «Сегодня»' }
-      : v.state === 'approved' ? { tone: 'success', text: q ? 'КП отправлено клиенту в чат' : 'Ответ отправлен клиенту в чат' }
-      : v.state === 'rejected' ? { tone: 'neutral', text: 'Отказано, клиент получил ответ в чате' }
-      : { tone: 'neutral', text: 'Агент ведёт разговор сам' };
-    if (v.decision_note) it.next = 'Ответ менеджера: ' + v.decision_note;
-    if (v.created || v.updated) {
-      // время последнего сообщения в строке журнала: сегодня часы, раньше ещё и дата
-      it.time = utc(v.updated || v.created);
-      var d = new Date(it.time), now = new Date(), two = function (n) { return (n < 10 ? '0' : '') + n; };
-      if (!isNaN(d)) it.meta += ' · ' + (d.toDateString() === now.toDateString() ? '' : two(d.getDate()) + '.' + two(d.getMonth() + 1) + ' ') + two(d.getHours()) + ':' + two(d.getMinutes());
-    }
+    // разговор без КП и без передачи отличается от соседних первой фразой клиента
+    // клиент стоит в строке отдельно, заголовок его не повторяет
+    it.title = q || REASON[v.reason] ? c.queue_title : first ? '«' + first + '»' : 'Разговор с агентом';
+    if (v.state === 'pending') { it.case_id = v.id; it.status = { tone: 'neutral', text: 'Ждёт ответа', open: true }; return it; }
+    closeCase(c, v);
+    if (!q && !REASON[v.reason]) c.title = it.title;
+    it.detail = c;
+    it.status = { tone: c.done_tone, text: c.done_label.replace(/ в \d{1,2}:\d{2}$/, '') };
     return it;
   }
-  // кабинет перечитывает журнал при каждом выборе строки: тот же разговор отдаём тем же объектом,
-  // чтобы загруженная переписка не пропадала и не запрашивалась по кругу
-  var jKnown = {};
   function journalList() {
-    return manager('GET', '/manager/cases?state=all&limit=50&offset=0').then(function (r) {
+    return manager('GET', '/manager/cases?state=all&limit=100&offset=0').then(function (r) {
       return { items: (r.cases || []).map(function (v) {
         var was = jKnown[v.id], sig = v.state + ':' + v.version + ':' + (v.updated || '');
         if (was && was._sig === sig) return was;
@@ -298,23 +302,24 @@
     });
   }
 
-  function toastText(text) { var el = document.getElementById('toast'); if (el) { el.textContent = text; el.classList.add('is-on'); setTimeout(function () { el.classList.remove('is-on'); }, 2600); } }
-
-  // ключ менеджера: одно поле поверх кабинета, ключ живёт до закрытия вкладки
+  // ключ менеджера: одно окно поверх кабинета, ключ живёт до закрытия вкладки
   var asked = false;
   function askKey(status) {
     if (asked || !document.getElementById('view')) return; asked = true;
+    var scrim = document.createElement('div');
+    scrim.className = 'scrim';
     var box = document.createElement('form');
-    box.className = 'panel key-form';
-    box.setAttribute('aria-label', 'Вход в кабинет');
-    box.innerHTML = '<div class="panel__head"><h2 class="t-h2">Вход в кабинет менеджера</h2></div>' +
-      '<p class="panel__note">' + (status === 503 ? 'На сервере агента не задан ключ менеджера. Попросите администратора стенда.' : 'Введите ключ менеджера стенда. Он хранится только в этой вкладке.') + '</p>' +
-      (status === 503 ? '' : '<label class="field" style="max-width:none"><input type="password" autocomplete="off" required minlength="24" placeholder="Ключ менеджера" aria-label="Ключ менеджера"></label>' +
-      '<button class="btn btn--primary" type="submit">Войти</button>');
+    box.className = 'dialog';
+    box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-labelledby', 'keyTitle');
+    box.innerHTML = '<h2 class="h2" id="keyTitle">Вход в кабинет менеджера</h2>' +
+      '<p class="dialog__text">' + (status === 503 ? 'На сервере агента не задан ключ менеджера. Попросите администратора стенда.' : 'Введите ключ менеджера стенда. Он хранится только в этой вкладке.') + '</p>' +
+      (status === 503 ? '' : '<input class="field" type="password" autocomplete="off" required minlength="24" placeholder="Ключ менеджера" aria-label="Ключ менеджера">' +
+      '<div class="dialog__buttons"><a class="btn btn--grey" href="?demo">Открыть пример</a><button class="btn btn--accent" type="submit">Войти</button></div>');
     box.addEventListener('submit', function (e) {
       e.preventDefault(); write(MANAGER_KEY, box.querySelector('input').value.trim()); location.reload();
     });
-    document.body.appendChild(box);
+    scrim.appendChild(box);
+    document.body.appendChild(scrim);
     var input = box.querySelector('input'); if (input) input.focus();
   }
 
@@ -332,8 +337,8 @@
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
     if (method === 'GET' && path === '/journal') return journalList();
-    if (method === 'GET' && (m = /^\/journal\/([^/]+)$/.exec(path))) return events(decodeURIComponent(m[1]));
-    // справка, статистика и настройки агента, проверка разговоров из журнала: в API их пока нет, экран покажет пример
+    // правка скидки, чат менеджера с клиентом, возврат агенту, пауза и лимит, справка, статистика, настройки
+    // и проверка разговоров из журнала: в API их пока нет, экран покажет пример и пометит это строкой сверху
     return Promise.reject(fail(404));
   }
 
