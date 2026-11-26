@@ -584,7 +584,7 @@
       if (!saved) { fresh(); return; }
       // перезагрузили страницу: тот же разговор целиком
       sid = saved; typing(true);
-      call('GET', '/chat/sessions/' + encodeURIComponent(sid) + '/messages?after=0').then(function (r) {
+      call('GET', '/chat/sessions/' + encodeURIComponent(sid) + '/messages').then(function (r) {
         typing(false); show(r.messages, true); if (!closed) run();
       }, function () { sid = ''; try { sessionStorage.removeItem(KEY); } catch (e) {} typing(false); fresh(); });
     }

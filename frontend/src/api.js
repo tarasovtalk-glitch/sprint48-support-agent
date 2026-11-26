@@ -96,12 +96,13 @@
     });
   }
 
-  // after = 0: вся беседа после перезагрузки страницы, иначе только новые реплики (ответ менеджера, PDF)
-  function chatPoll(sid, after) {
+  // history: вся беседа с приветствием после перезагрузки страницы. Опрос идёт по after и приветствие
+  // не добавляет: до первой реплики клиента after = 0, иначе приветствие приходило бы с каждым опросом
+  function chatPoll(sid, after, history) {
     var q = after ? '?after=' + after : '';
     return raw('GET', '/case/messages' + q, null, bearer(sid)).then(function (r) {
       var list = toMessages(r.messages || []);
-      if (!after) list.unshift({ from: 'agent', type: 'text', text: GREETING });
+      if (history) list.unshift({ from: 'agent', type: 'text', text: GREETING });
       return { messages: list };
     });
   }
@@ -258,7 +259,12 @@
     var who = q && q.customer ? q.customer : 'Посетитель сайта';
     var it = { id: v.id, channel: 'чат', client: who, review: false, open: v.state === 'open' || v.state === 'pending' };
     // название позиции из фида длинное: в строке и заголовке только клиент и количество, позиция строкой ниже заголовка
-    it.title = q ? who + ': КП' + (q.quantity ? ' на ' + q.quantity + ' шт.' : '') : why ? why.title : 'Разговор с агентом';
+    // первое сообщение клиента отличает разговоры без КП и без причины передачи друг от друга
+    var first = String(v.first_client_message || '').replace(/\s+/g, ' ').trim();
+    if (first.length > 64) first = first.slice(0, 63).replace(/\s+\S*$/, '') + '…';
+    it.title = q ? who + ': КП' + (q.quantity ? ' на ' + q.quantity + ' шт.' : '') : why ? why.title : first ? '«' + first + '»' : 'Разговор с агентом';
+    // в карточке справа реплика видна в переписке, заголовок её не повторяет
+    if (first) { it.first = first; if (!q && !why) it.detail_title = 'Разговор с агентом'; }
     if (q) { it.client = (offer.name || 'Позиция каталога') + (q.inn ? ' · ИНН ' + q.inn : ''); it.inn = q.inn || ''; }
     it.meta = (q ? 'Проверка КП' : why ? who : 'Агент отвечал сам') + ' · чат';
     if (q && q.amount_kopecks != null) it.value_rub = rub(q.amount_kopecks);
@@ -268,7 +274,12 @@
       : v.state === 'rejected' ? { tone: 'neutral', text: 'Отказано, клиент получил ответ в чате' }
       : { tone: 'neutral', text: 'Агент ведёт разговор сам' };
     if (v.decision_note) it.next = 'Ответ менеджера: ' + v.decision_note;
-    if (v.created || v.updated) it.time = utc(v.updated || v.created);
+    if (v.created || v.updated) {
+      // время последнего сообщения в строке журнала: сегодня часы, раньше ещё и дата
+      it.time = utc(v.updated || v.created);
+      var d = new Date(it.time), now = new Date(), two = function (n) { return (n < 10 ? '0' : '') + n; };
+      if (!isNaN(d)) it.meta += ' · ' + (d.toDateString() === now.toDateString() ? '' : two(d.getDate()) + '.' + two(d.getMonth() + 1) + ' ') + two(d.getHours()) + ':' + two(d.getMinutes());
+    }
     return it;
   }
   // кабинет перечитывает журнал при каждом выборе строки: тот же разговор отдаём тем же объектом,
@@ -277,7 +288,7 @@
   function journalList() {
     return manager('GET', '/manager/cases?state=all&limit=50&offset=0').then(function (r) {
       return { items: (r.cases || []).map(function (v) {
-        var was = jKnown[v.id], sig = v.state + ':' + v.version;
+        var was = jKnown[v.id], sig = v.state + ':' + v.version + ':' + (v.updated || '');
         if (was && was._sig === sig) return was;
         var it = toJournal(v); it._sig = sig; jKnown[v.id] = it; return it;
       }) };
@@ -310,7 +321,8 @@
     if (method === 'POST' && path === '/chat/sessions') return chatOpen();
     if ((m = /^\/chat\/sessions\/([^/]+)\/messages(?:\?after=(\d+))?$/.exec(path))) {
       var sid = decodeURIComponent(m[1]);
-      return method === 'POST' ? chatSend(sid, body || {}) : chatPoll(sid, +(m[2] || 0));
+      // без after: восстановить разговор целиком, с after: только новые реплики
+      return method === 'POST' ? chatSend(sid, body || {}) : chatPoll(sid, +(m[2] || 0), m[2] == null);
     }
     if (/^\/chat\/sessions\/[^/]+\/rating$/.test(path)) return Promise.resolve({}); // оценки в API пока нет
     if (method === 'GET' && path === '/cases') return casesList();

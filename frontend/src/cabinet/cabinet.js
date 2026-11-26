@@ -320,7 +320,7 @@
     var list = scoped.filter(function (it) {
       if (ui.jFilter === 'open' && !it.open) return false;
       if (ui.jFilter === 'review' && !it.review) return false;
-      return !q || (it.title + ' ' + it.meta + ' ' + (it.client || '') + ' ' + (it.inn || '')).toLowerCase().indexOf(q) >= 0;
+      return !q || (it.title + ' ' + it.meta + ' ' + (it.client || '') + ' ' + (it.inn || '') + ' ' + (it.first || '')).toLowerCase().indexOf(q) >= 0;
     });
     var PAGE = 6, shown = ui.jAll ? list : list.slice(0, PAGE);
     if (!ui.jSel || !list.some(function (i) { return i.id === ui.jSel; })) ui.jSel = list.length ? list[0].id : null;
