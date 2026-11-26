@@ -31,9 +31,10 @@
 .slc-head__btn:hover{background:rgba(255,255,255,.12)}
 .slc-head__btn svg{display:block}
 
-.slc-menu{position:absolute;top:80px;left:14px;right:14px;background:var(--red);border-radius:10px;padding:8px 0;box-shadow:0 6px 18px rgba(0,0,0,.18);z-index:3;display:none}
+/* меню «⋯» продолжает шапку: на всю ширину окна, сверху без скругления, иконки по одной линии с аватаром */
+.slc-menu{position:absolute;top:80px;left:0;right:0;background:var(--red);border-radius:0 0 10px 10px;padding:4px 0 10px;box-shadow:0 10px 16px -8px rgba(0,0,0,.3);z-index:3;display:none}
 .slc-menu.is-open{display:block}
-.slc-menu__item{display:flex;align-items:center;gap:14px;width:100%;padding:8px 16px;color:#fff;font-size:14px;line-height:18px;text-align:left}
+.slc-menu__item{display:flex;align-items:center;gap:14px;width:100%;padding:8px 25px;color:#fff;font-size:14px;line-height:18px;text-align:left}
 .slc-menu__item:hover{background:rgba(255,255,255,.1)}
 .slc-menu__item svg{flex:0 0 18px}
 

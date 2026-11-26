@@ -127,6 +127,9 @@
   };
   var STATUS = { pending: 'waiting', approved: 'approved', rejected: 'refused', open: 'waiting' };
 
+  // реквизиты покупателя из КП: ИНН и КПП рядом, через запятую
+  function requisites(q) { return [q.inn ? 'ИНН ' + q.inn : '', q.kpp ? 'КПП ' + q.kpp : ''].filter(Boolean).join(', '); }
+
   function toCase(v) {
     var q = v.quote, why = REASON[v.reason] || { title: 'Запрос клиента', advice: 'Агент передал разговор менеджеру. Переписка ниже.' };
     var who = q && q.customer ? q.customer : 'Посетитель сайта';
@@ -136,7 +139,7 @@
       c.kind = 'approve';
       c.title = who + ': КП, ' + (offer.name || 'позиция каталога');
       c.amount_rub = rub(q.amount_kopecks || 0);
-      c.desc = [q.quantity ? q.quantity + ' шт.' : '', q.inn ? 'ИНН ' + q.inn : '', q.payment_terms || '', q.vat_status || ''].filter(Boolean).join(' · ');
+      c.desc = [q.quantity ? q.quantity + ' шт.' : '', requisites(q), q.payment_terms || '', q.vat_status || ''].filter(Boolean).join(' · ');
       c.approve_label = 'Отправить КП в чат';
       c.effect = 'Клиент получит PDF коммерческого предложения в этом же чате';
       c.refuse_reasons = ['Позиция не подходит под задачу клиента'];
@@ -265,7 +268,7 @@
     it.title = q ? who + ': КП' + (q.quantity ? ' на ' + q.quantity + ' шт.' : '') : why ? why.title : first ? '«' + first + '»' : 'Разговор с агентом';
     // в карточке справа реплика видна в переписке, заголовок её не повторяет
     if (first) { it.first = first; if (!q && !why) it.detail_title = 'Разговор с агентом'; }
-    if (q) { it.client = (offer.name || 'Позиция каталога') + (q.inn ? ' · ИНН ' + q.inn : ''); it.inn = q.inn || ''; }
+    if (q) { it.client = [offer.name || 'Позиция каталога', requisites(q)].filter(Boolean).join(' · '); it.inn = [q.inn, q.kpp].filter(Boolean).join(' '); }
     it.meta = (q ? 'Проверка КП' : why ? who : 'Агент отвечал сам') + ' · чат';
     if (q && q.amount_kopecks != null) it.value_rub = rub(q.amount_kopecks);
     it.status = v.state === 'approved' ? (q ? 'КП отправлено' : 'ответ отправлен') : STATE_SIDE[v.state] || '';

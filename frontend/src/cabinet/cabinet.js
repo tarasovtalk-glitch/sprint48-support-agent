@@ -71,8 +71,8 @@
   // раздел с сервера; нет сервера или раздела, берём пример и помечаем вкладку
   function load(key, path, sample) {
     if (DEMO) { if (store[key] == null) store[key] = copy(sample); return Promise.resolve(store[key]); }
-    return call('GET', path).then(function (d) { store.sample[key] = false; store[key] = d; return d; }, function () {
-      store.sample[key] = true; if (store[key] == null) store[key] = copy(sample); return store[key];
+    return call('GET', path).then(function (d) { store.sample[key] = false; store[key] = d; return d; }, function (e) {
+      store.sample[key] = (e && e.status) || true; if (store[key] == null) store[key] = copy(sample); return store[key];
     });
   }
   function isLocal(key) { return DEMO || store.sample[key]; }
@@ -144,10 +144,14 @@
     if (st === 'limit') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Лимит на месяц потрачен. Агент молчит до 1-го числа, все чаты идут менеджерам') + '</span><a class="link" href="#agent/settings">Поднять лимит</a></div>');
     if (st === 'down') notes.push('<div class="notice"><span class="notice__text">' + t(store.status.text || 'Модель не отвечает. Все чаты идут менеджерам, агент вернётся сам, когда модель заработает') + '</span></div>');
     var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab];
-    if (!DEMO && store.sample[key]) {
-      notes.push('<div class="notice notice--sample"><span class="notice__text">' + (key === 'cases'
-        ? 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят'
-        : 'Сервер агента пока не отдаёт этот раздел, показан пример с макета') + '</span></div>');
+    // вместо данных сервера показан пример: это предупреждение, оно красное, как остальные. Текст по причине
+    var why = store.sample[key];
+    if (!DEMO && why) {
+      notes.push('<div class="notice"><span class="notice__text">' + t(why === 401 || why === 403
+        ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
+        : why === 503 ? 'На сервере агента не задан ключ менеджера. Пока показан пример, решения из него никуда не уходят'
+        : why === 404 ? 'Сервер агента пока не отдаёт этот раздел, показан пример с макета'
+        : 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят') + '</span></div>');
     }
     $('#notice').innerHTML = notes.join('');
     $('#notice').style.display = notes.length ? '' : 'none';
