@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_KEY = 'test-demo-key-0123456789abcdef'  # тестовое значение, не ключ стенда
+MANAGER_KEY = 'test-manager-key-0123456789abcdef'  # тестовое значение, не ключ стенда
 FONTS = ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf',
          'C:/Windows/Fonts/arial.ttf')
 
@@ -32,6 +33,7 @@ def make_client(catalog: Path | None = None):
     work = Path(tempfile.mkdtemp(prefix='smf-local-'))
     os.environ['SUPPORT_CHAT_ONLY'] = '1'
     os.environ['SUPPORT_DEMO_KEY'] = DEMO_KEY
+    os.environ['SUPPORT_MANAGER_KEY'] = MANAGER_KEY
     os.environ['YANDEX_API_KEY'] = ''
     os.environ['YANDEX_MODEL_URI'] = ''
     os.environ['SUPPORT_PDF_FONT'] = next(f for f in FONTS if Path(f).is_file())
