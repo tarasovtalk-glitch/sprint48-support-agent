@@ -104,12 +104,14 @@ def add_offer(db: sqlite3.Connection, node, categories: dict[str, str]):
     category = categories.get(node.findtext('categoryId', ''), '')
     min_users, max_users = user_range(title, params)
     new_purchase = not re.search(EXPANSION_OR_MEDIA, normalize(f'{title} {params.get("Тип лицензии", "")}'))
+    price = price_kopecks(node.findtext('price', ''), node.findtext('currencyId', ''))
     cursor = db.execute('INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (
         offer_id, node.get('group_id') or offer_id, title, vendor, category,
         node.findtext('vendorCode', '').strip() or None,
         product_url(node.findtext('url', '')),
-        price_kopecks(node.findtext('price', ''), node.findtext('currencyId', '')),
-        int(node.get('available') == 'true'),
+        price,
+        # правило заказчика (брифинг 26.11): есть цена — товар в наличии; без цены («Запросить цену») — только через менеджера
+        int(bool(price and price > 0)),
         min_users, max_users,
         int(term.group(1)) if term else None, registry if number(registry) else None,
         json.dumps(params, ensure_ascii=False), int(new_purchase),

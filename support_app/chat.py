@@ -355,12 +355,17 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
 
 
+# просьба позвать человека; «согласовать через менеджера» — это вопрос, а не просьба
+HANDOFF_ASK = re.compile(r'(?:позов|позвать|подключ|соедин|переключ|свяж|дайте|нужен|нужна|хочу|можно|пригласит)\w*\s+(?:меня\s+)?(?:с\s+)?(?:живым\s+|живого\s+)?'
+                         r'(?:оператор|менеджер|специалист|человек)|^(?:оператор|менеджер|специалист|человек)\w*\W*$')
+
+
 def knowledge_hit(db, row, state, text, query, count, action, tool):
     """Ответ из базы знаний — только на вопрос без действия по сделке: не просьба об операторе, не количество,
     не реквизиты, не ответ на вопрос бота. Сбой памяти не ломает разговор: пишем событие и идём обычным путём."""
-    if (not text or action or tool or count or state.get('awaiting_customer') or EXPLICIT_HANDOFF.search(query)
-            or re.search(r'\b(?:оператор|менеджер|специалист|человек)\w*', query)
-            or QUOTE_REQUISITES.search(text) or INN_FORMAT.search(text)):
+    in_deal = any(state.get(k) for k in ('flow', 'offer_id', 'g_family', 'g_items', 'quote'))
+    if (not text or action or tool or (count and in_deal) or state.get('awaiting_customer') or EXPLICIT_HANDOFF.search(query)
+            or HANDOFF_ASK.search(query) or QUOTE_REQUISITES.search(text) or INN_FORMAT.search(text)):
         return None
     try:
         known = find_answer(db, text)

@@ -106,6 +106,8 @@ PERSON = re.compile(r'физ\w*\s*лиц|физлиц|физик|просто ч
 CLOSING = re.compile(r'^\s*(?:ок|окей|ok|хорошо|понял\w*|ясно|спасибо|благодарю|жаль|ждем|ждём|принято|договорились|супер|отлично)'
                      r'(?:[\s,.!]+(?:спасибо|ждем|ждём|понял\w*|оформлю\s+на\s+сайте|ок|большое|за\s+помощь|тогда))*[\s.!)]*$')
 CHEAPER = re.compile(r'дешевл\w*|подешевле|самы[йе]\s+деш\w*|бюджетн\w*|недорог\w*')
+# «а word и excel там есть?», «что входит в пакет» — вопрос о составе текущего товара, а не поиск нового
+COMPOSITION = re.compile(r'\bтам\s+есть\b|\bесть\s+ли\s+(?:там|в\s+н\w*)\b|\bвход(?:ит|ят)\b|\bвключ\w*|\bв\s+состав\w*|\bв\s+комплект\w*|\bсостав\s+(?:пакета|лицензии)')
 INSIST = re.compile(r'\bименно\b|только\s+(?:его|её|ее|этот|эту)|другой\s+не\s+(?:нужен|подходит)')
 ANALOG_ASK = re.compile(r'аналог\w*|вместо|замен\w*|что\s+(?:есть|ещё|еще)\s+(?:вместо|похож)|что\s+есть\s+для|что\s+есть\??$|отечествен\w*\s+(?:аналог|сервер|вариант)|рассмотрим\s+отечествен')
 PER_UNIT = re.compile(r'на\s+одном|на\s+1\s+(?:рабоч|пк|пользоват|компьют|ip|устройств)|за\s+1\s|цена\s+за|однопользоват|per\s+seat|rutoken|'
@@ -640,6 +642,19 @@ def is_closing(text: str) -> bool:
 
 
 # ── один ход общего разговора ────────────────────────────────────────────────
+def composition_reply(family: list[dict], offer_id: str | None, text: str) -> str:
+    """Состав говорим только по карточке: что есть в названии или параметрах — подтверждаем, остального не придумываем."""
+    item = next((o for o in family if o['id'] == offer_id), family[0])
+    card = normalize(item['name'] + ' ' + ' '.join(f'{k} {v}' for k, v in item['parameters'].items()))
+    asked = [w for w in re.findall(r'[a-z][a-z0-9+.\-]{1,}', normalize(text)) if w not in {'there', 'is', 'in'}]
+    shown = ', '.join(w.capitalize() for w in asked) or 'нужные программы'
+    link = f' Карточка: {item["url"]}' if item.get('url') else ''
+    if asked and all(w in card for w in asked):
+        return f'Да, по карточке «{item["name"]}»: {shown} указаны в составе.{link}'
+    return (f'В карточке «{item["name"]}» состав пакета не расписан, поэтому про {shown} не буду гадать.{link} '
+            'Точный состав подтвердит менеджер — нажмите «Позвать оператора».')
+
+
 def catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote, page_url: str = ''):
     page = re.search(r'store\.softline\.ru/.*?-(\d+)/?$', page_url or '')
     if page and not state.get('g_family') and catalog.is_file():
@@ -708,6 +723,10 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
         return 'Понял, нужен именно этот вариант. Его наличие и цену сверит менеджер. ' + queue('exact_product_request'), []
 
     with closing(read_only(catalog)) as db:
+        if state.get('g_family') and COMPOSITION.search(t):
+            current = _family(db, state['g_family'])
+            if current:
+                return composition_reply(current, state.get('offer_id'), text), [('Позвать оператора', 'handoff', '')]
         if state.get('g_items') and re.search(r'\bинн\b', t):
             return multi_quote(db, state, queue)
         several = None if state.get('g_family') or SKU.search(normalize(text)) else multi_item(db, state, text)

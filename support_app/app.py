@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -410,11 +411,16 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
                 knowledge = None
                 if decision.remember and decision.note.strip():
+                    db.execute('SAVEPOINT knowledge')  # сбой базы знаний не откатывает ответ менеджера клиенту
                     try:
                         knowledge = remember_answer(db, case_id, decision.remember_question, decision.note)
-                    except HTTPException as error:  # решение клиенту уходит, в базу не сохраняем и говорим менеджеру почему
-                        append_event(db, case_id, 'knowledge_rejected', str(error.detail)[:200])
-                        knowledge = {'saved': False, 'reason': error.detail}
+                        db.execute('RELEASE knowledge')
+                    except (HTTPException, sqlite3.Error) as error:  # решение клиенту уходит, в базу не сохраняем и говорим почему
+                        db.execute('ROLLBACK TO knowledge')
+                        db.execute('RELEASE knowledge')
+                        reason = error.detail if isinstance(error, HTTPException) else 'База знаний недоступна, ответ клиенту отправлен.'
+                        append_event(db, case_id, 'knowledge_rejected', str(reason)[:200])
+                        knowledge = {'saved': False, 'reason': reason}
                 return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url, 'knowledge': knowledge}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
