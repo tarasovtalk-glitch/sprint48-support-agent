@@ -231,7 +231,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             plan = tool_request(payload.text or '', payload.action, payload.value, existing_context)
             model_options = {'api_key': model_key, 'model_uri': model_uri, 'daily': daily_limit, 'total': total_limit}
             selected_tool = choose_tool(store, case_id, *plan, **model_options) if plan else None
-            cues = intent_cues(payload.text) if payload.text and not existing_context else ''
+            cues = intent_cues(payload.text) if payload.text and not existing_context.get('awaiting_customer') else ''
             hint = classify(store, case_id, cues, **model_options) if cues and not plan else 'unknown'
             with store.connect(write=True) as db:
                 state = chat_state(db, case_id)
@@ -315,6 +315,23 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             'Referrer-Policy': 'no-referrer',
             'Cache-Control': 'no-store',
         })
+
+    @app.get(PREFIX + '/manager/access')
+    def manager_access(role: str = Depends(cabinet_role)):
+        return {'role': role}
+
+    @app.get(PREFIX + '/manager/metrics')
+    def manager_metrics(reader: Store = Depends(cabinet_reader)):
+        with reader.connect() as db:
+            cases = db.execute('SELECT COUNT(*) FROM cases').fetchone()[0]
+            calls, input_tokens, output_tokens, cost = db.execute('''
+                SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                       COALESCE(SUM(cost_microrubles), 0)
+                FROM model_usage WHERE input_tokens IS NOT NULL
+            ''').fetchone()
+        return {'cases': cases, 'model_calls': calls, 'input_tokens': input_tokens,
+                'output_tokens': output_tokens, 'cost_microrubles': cost,
+                'sample': reader is jury_store}
 
     @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),

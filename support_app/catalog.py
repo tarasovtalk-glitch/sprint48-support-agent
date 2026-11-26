@@ -178,6 +178,9 @@ def purchasable_units(offer: dict, requested_users: int) -> int | None:
         return requested_users if tier and sku in {family + tier + 'FS' for family in KASPERSKY_FAMILIES} else None
     if sku in ('PRO32-PSS-NS-1-50', 'PRO32-PSS-CLS-1Y-50-NS-RU'):
         return 1 if requested_users <= 50 else None
+    if offer.get('id') == '19576' and offer.get('max_users') == 20 and offer.get('term_months') == 12:
+        # The feed price is for one MDaemon Messaging Server licence covering 20 users.
+        return 1 if requested_users == 20 else None
     if 'на одном рабочем месте' in normalize(offer['name']):
         return requested_users
     return 1 if requested_users == 1 and offer.get('min_users') in (None, 1) else None

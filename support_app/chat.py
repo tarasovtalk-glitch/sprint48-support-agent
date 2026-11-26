@@ -20,6 +20,16 @@ MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
 WINDOWS_PRO = re.compile(r'\bwindows\s+11\s+pro\b')
 OFFICE_HOME = re.compile(r'\b(?:дома|для дома|домашн\w*)\b.{0,40}\b(?:office|офис)\b|\b(?:office|офис)\b.{0,40}\bдля дома\b')
+EDUCATIONAL_PRICE = re.compile(r'школ|учебн|образовательн')
+VIPNET_NAME = re.compile(r'vipnet|випнет')
+CSP_COMPARISON = (
+    'КриптоПро CSP и ViPNet CSP поддерживают создание и проверку электронной подписи. '
+    'Для бухгалтерии выбирайте криптопровайдер, который прямо поддерживает ваш сервис отчётности '
+    'для вашей ОС и носителя ключа. Если в требованиях указан КриптоПро CSP, выбирайте его. '
+    'Если сервис поддерживает оба, сравните условия лицензии и совместимость с тем, что уже установлено.\n'
+    'Источники: https://cryptopro.ru/products/csp и https://www.infotecs.ru/products/vipnet-csp/\n'
+    'В каком сервисе вы сдаёте отчётность?'
+)
 TEXT_TERMS = (
     (12, re.compile(r'\b12\s*месяц|\bна\s+(?:1\s+год|один\s+год|год)(?:\s|$|[,.!?])')),
     (24, re.compile(r'\b24\s*месяц|\bна\s+(?:2|два)\s+год')),
@@ -71,6 +81,9 @@ def intent_cues(text: str) -> str:
 def tool_request(text: str, action: str | None, value: str, state: dict):
     """Return only scenario facts suitable for the model, never the customer's raw input."""
     query = normalize(text)
+    if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query):
+        return ('Клиент уточняет условия для школы по ранее названной редакции. Подтверждённой цены для школы нет.',
+                ('contact_manager',))
     if state.get('flow') == 'needs':
         if REGISTRY_QUERY.search(query) and state.get('term') and state.get('deployment'):
             return ('Клиент спрашивает, есть ли российский аналог и запись в реестре отечественного ПО. Требования уже собраны.',
@@ -294,17 +307,30 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', query)
     if count:
         state['quantity'] = int(count.group(1))
+    if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query):
+        if tool == 'contact_manager':
+            append_event(db, row['id'], 'model_tool_executed', tool)
+        return 'Для школы цену нужно уточнить по условиям образовательной поставки. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if tool == 'contact_manager':
         append_event(db, row['id'], 'model_tool_executed', tool)
         reason = 'customer_request' if action == 'handoff' or EXPLICIT_HANDOFF.search(query) else 'model_routing'
         return enter_queue(db, row, state, reason), []
     if action == 'handoff' or re.search(r'(?:позови|подключи|соедини)\w*\s+(?:с\s+)?(?:оператор|менеджер)', query):
         return enter_queue(db, row, state, 'customer_request'), []
+    if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
+        append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
+        return CSP_COMPARISON, JOIN_MANAGER
     if state.get('awaiting_customer') and text:
         remember_quote_customer(state, text)
         if tool == 'draft_quote' and all(state.get(field) for field in ('customer', 'inn', 'kpp')):
             append_event(db, row['id'], 'model_tool_executed', tool)
         return queue_quote(db, row, state, catalog)
+    if state.get('flow') == 'mdaemon' and QUOTE_REQUISITES.search(text):
+        offers = state.get('offered_ids', [])
+        if len(offers) == 1:
+            state['offer_id'] = offers[0]
+            remember_quote_customer(state, text)
+            return queue_quote(db, row, state, catalog)
     if re.search(r'оператор|тендер|госзакупк|запросить цену', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
