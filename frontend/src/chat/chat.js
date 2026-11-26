@@ -68,7 +68,8 @@
   function ddmm(d) { d = d || new Date(); return two(d.getDate()) + '.' + two(d.getMonth() + 1); }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   // неразрывный пробел после коротких слов и перед ₽, чтобы предлоги не висели в конце строки
-  function ty(s) { return s.replace(/(^|[\s(«*])([А-Яа-яЁёA-Za-z]{1,2}|№|•)\s/g, '$1$2 ').replace(/(^|[\s(«*])([А-Яа-яЁёA-Za-z]{1,2})\s/g, '$1$2 ').replace(/\s₽/g, ' ₽'); }
+  function ty(s) { return s.replace(/(^|[\s(«*])([А-Яа-яЁёA-Za-z]{1,2}|№|•)\s/g, '$1$2 ').replace(/(^|[\s(«*])([А-Яа-яЁёA-Za-z]{1,2})\s/g, '$1$2 ').replace(/\s₽/g, ' ₽')
+    .replace(/(\d) (?=\d{3}(?!\d))/g, '$1 ').replace(/ (—|×|=) /g, ' $1 '); } // число не рвётся по разрядам, знак держится за число слева
   function money(v) {
     var r = Math.round(v * 100) / 100, int = Math.floor(r), kop = Math.round((r - int) * 100);
     return String(int).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (kop ? ',' + two(kop) : '') + ' ₽';

@@ -46,7 +46,7 @@
 .slc-msg__avatar{width:24px;height:24px;flex:0 0 24px;margin-bottom:32px}
 .slc-msg__col{display:flex;flex-direction:column;max-width:222px}
 .slc-msg--me{padding-right:10px}
-.slc-bubble{background:var(--bot);border-radius:14px;padding:10px 20px 11px;font-size:13px;line-height:17px;color:var(--text);white-space:pre-wrap}
+.slc-bubble{background:var(--bot);border-radius:14px;padding:10px 20px 11px;font-size:13px;line-height:17px;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere}
 .slc-time{font-size:10px;color:var(--time);margin:5px 0 14px 0;display:flex;align-items:center;gap:6px}
 .slc-msg--me{justify-content:flex-end}
 .slc-msg--me .slc-bubble{background:var(--me)}
