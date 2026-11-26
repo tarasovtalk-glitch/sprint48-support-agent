@@ -15,6 +15,13 @@ CRYPTO_NAME = re.compile(r'крипто\s*про|crypto\s*pro')
 NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
 EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|запросить цену|тендер|госзакупк')
+MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
+TEXT_TERMS = (
+    (12, re.compile(r'\b12\s*месяц|\bна\s+(?:1\s+год|один\s+год|год)(?:\s|$|[,.!?])')),
+    (24, re.compile(r'\b24\s*месяц|\bна\s+(?:2|два)\s+год')),
+)
+LOCAL_DEPLOYMENT = re.compile(r'\b(?:свое?м|своих?|нашем|наших|собственном|собственных)\s+сервер|\bлокальн\w+')
+CLOUD_DEPLOYMENT = re.compile(r'^\s*облако[.!]?\s*$|\bв\s+облак|\bоблачн\w+\s+(?:развертыван|верси|решен)')
 REGISTRY_REFERENCES = (
     ('kaspersky security для почтовых серверов базовая лицензия', '203'),
     ('kaspersky endpoint security для бизнеса стандартный базовая лицензия', '205'),
@@ -51,7 +58,7 @@ INTENT_CUES = {
 
 def intent_cues(text: str) -> str:
     query = normalize(text)
-    if CRYPTO_NAME.search(query) or re.search(r'mdaemon|защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
+    if CRYPTO_NAME.search(query) or MDAEMON_NAME.search(query) or re.search(r'защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
         return ''
     tokens = [w for w in PRODUCT_WORDS.findall(query) if w in INTENT_CUES]
     return ' '.join(tokens[:20]) if len(tokens) >= 2 else ''
@@ -272,7 +279,7 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
 
 def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url='', tool=None):
     query = normalize(text)
-    count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|рабочих\s+мест|узл|ящик|мест)', query)
+    count = re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', query)
     if count:
         state['quantity'] = int(count.group(1))
     if tool == 'contact_manager':
@@ -305,7 +312,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state.update(flow='cryptopro', query=text)
         state.pop('offer_id', None)
         state.pop('offered_ids', None)
-    if 'mdaemon' in query:
+    if MDAEMON_NAME.search(query):
         state.update(flow='mdaemon', query=text)
     if NEEDS_QUERY.search(query):
         append_event(db, row['id'], 'requirements_understood', 'software_protection')
@@ -344,10 +351,24 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if state.get('flow') in ('needs', 'mdaemon'):
         if action == 'term' and value in {'12', '24'}:
             state['term'] = int(value)
+        elif text:
+            terms = [months for months, pattern in TEXT_TERMS if pattern.search(query)]
+            if len(terms) == 1:
+                state['term'] = terms[0]
         if action == 'deployment' and value in {'local', 'cloud', 'flexible'}:
             state['deployment'] = value
+        elif text:
+            local = bool(LOCAL_DEPLOYMENT.search(query))
+            cloud = bool(CLOUD_DEPLOYMENT.search(query)) and not re.search(r'\bне\s+в\s+облак|\bбез\s+облак', query)
+            if local != cloud:
+                state['deployment'] = 'local' if local else 'cloud'
         if action == 'focus' and value in {'mail', 'all'}:
             state['focus'] = value
+        elif state['flow'] == 'needs' and not state.get('focus') and not NEEDS_QUERY.search(query):
+            if re.search(r'\b(?:вместе|и почта,?\s+и файлы|почт\w+.{0,70}компьютер)', query):
+                state['focus'] = 'all'
+            elif re.search(r'\b(?:только|сначала)\s+почт', query):
+                state['focus'] = 'mail'
         registry = bool(REGISTRY_QUERY.search(query))
         ready = bool(state.get('quantity') and state.get('term') and state.get('deployment') and
                      (state['flow'] != 'needs' or state.get('focus')))
