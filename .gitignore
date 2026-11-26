@@ -9,3 +9,7 @@ API_ai_key.conf
 server.conf
 sprint_tg.conf
 token_max.conf
+
+# frontend
+frontend/node_modules/
+frontend/dist/
