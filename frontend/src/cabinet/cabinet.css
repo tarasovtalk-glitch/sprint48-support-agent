@@ -61,6 +61,7 @@ b,strong{font-weight:500}
 .header__title{font:500 16px/24px var(--font)}
 .user{display:flex;align-items:center;gap:12px;padding:4px 16px 4px 4px;background:#fff;border-radius:28px;box-shadow:var(--sh-card);transition:box-shadow var(--t-state) var(--ease),background-color var(--t-state) var(--ease)}
 .user:hover{box-shadow:0 1px 3px rgba(0,0,0,.06),0 6px 28px rgba(0,0,0,.1)}
+.user[hidden]{display:none}
 .user:focus-visible{box-shadow:var(--sh-card),var(--ring)}
 .user__who{display:flex;flex-direction:column;text-align:left}
 .user__name{font-weight:500}

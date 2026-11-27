@@ -111,6 +111,13 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         for digest, role in access_keys.items()
     ):
         raise ValueError('Invalid cabinet access key configuration.')
+    hidden_path = database.with_name('hidden-test-cases.json')
+    hidden_cases = json.loads(hidden_path.read_text(encoding='utf-8')) if hidden_path.is_file() else []
+    if not isinstance(hidden_cases, list) or any(
+        not isinstance(case_id, str) or not re.fullmatch(r'[a-f0-9]{32}', case_id) for case_id in hidden_cases
+    ):
+        raise ValueError('Invalid hidden test case configuration.')
+    hidden_ids = json.dumps(hidden_cases)
     jury_directory = TemporaryDirectory(prefix='support-jury-') if 'jury' in access_keys.values() else None
     jury_store = create_jury_store(Path(jury_directory.name) / 'sample.sqlite3') if jury_directory else None
     model_key = os.environ.get('YANDEX_API_KEY', '')
@@ -356,8 +363,10 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message,
                     (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id DESC LIMIT 1) AS last_client_message
                 FROM cases c
-                WHERE (?='all' OR c.state='pending') ORDER BY c.rowid DESC LIMIT ? OFFSET ?
-            ''', (state, limit, offset)).fetchall()
+                WHERE (?='all' OR c.state='pending')
+                  AND c.id NOT IN (SELECT value FROM json_each(?))
+                ORDER BY c.rowid DESC LIMIT ? OFFSET ?
+            ''', (state, hidden_ids if reader is store else '[]', limit, offset)).fetchall()
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
@@ -491,7 +500,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     def knowledge(reader: Store = Depends(cabinet_reader)):
         with reader.connect() as db:
             rows = db.execute('SELECT * FROM rules ORDER BY rowid DESC LIMIT 50').fetchall()
-            answers = all_answers(db) if reader is store else []
+            answers = all_answers(db)
         return {'rules': [dict(row) for row in rows], 'answers': answers}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/journal')

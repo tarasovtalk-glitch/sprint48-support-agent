@@ -253,6 +253,8 @@
       case 'model_budget_exceeded': return 'лимит модели потрачен, ответил по правилам';
       case 'manager_decision': return d === 'rejected' ? 'менеджер отказал' : 'менеджер ответил';
       case 'catalog_quote_sent': return 'КП ушло клиенту в чат';
+      case 'knowledge_saved': return 'ответ менеджера сохранён в «Знаниях»';
+      case 'knowledge_answer': return 'ответил из базы знаний';
       case 'model_tool_executed': return TOOL[d] || '';
     }
     return '';

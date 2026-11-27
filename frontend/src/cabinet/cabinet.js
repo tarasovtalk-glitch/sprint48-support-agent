@@ -193,6 +193,12 @@
 
   /* ---------- шапка: счётчик, состояние агента, строка-предупреждение ---------- */
   function renderTop() {
+    var profile = $('#user');
+    var role = DEMO ? 'Антон' : ({admin: 'Администратор', manager: 'Менеджер', jury: 'Жюри'})[store.role];
+    profile.hidden = !role;
+    $('.user__name', profile).textContent = role || '';
+    $('.user__role', profile).textContent = DEMO ? 'Менеджер Store, до 18:00' : '';
+    $('.avatar', profile).textContent = role ? role.charAt(0) : '';
     var n = queue().length, c = $('#todayCounter');
     c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
     var st = status().state, h;
@@ -376,7 +382,7 @@
   function lineHtml(l) {
     var av = l.who === 'agent' ? BOT : l.who === 'client' ? '<span class="avatar avatar--24" aria-hidden="true">К</span>'
       : '<span class="avatar avatar--24 avatar--staff" aria-hidden="true">' + esc(l.who === 'me' ? 'А' : l.initials || (l.name || 'М').charAt(0)) + '</span>';
-    var who = l.who === 'agent' ? 'Агент' : l.who === 'client' ? 'Клиент' : l.who === 'me' ? 'Антон' : l.name || 'Менеджер';
+    var who = l.who === 'agent' ? 'Агент' : l.who === 'client' ? 'Клиент' : l.who === 'me' ? (DEMO ? 'Антон' : 'Вы') : l.name || 'Менеджер';
     return '<div class="line' + (l._new ? ' is-new' : '') + '">' + av + '<p><span class="line__who">' + esc(who) + '</span> ' + t(l.text) + '</p></div>';
   }
   // переписка и шаги с сервера приходят отдельным запросом, когда карточку открыли
@@ -879,7 +885,7 @@
       /* профиль */
       case 'profile':
         if (pop && pop.anchor === b) { closePop(); return; }
-        openPop(b, '<div class="menu__head"><span class="medium">Антон</span><span class="muted">Менеджер Store, до 18:00</span></div><div class="menu__sep"></div>' + menu([{ label: 'Выйти', act: 'logout' }]), { width: b.offsetWidth, align: 'right' });
+        openPop(b, '<div class="menu__head"><span class="medium">' + t($('.user__name', b).textContent) + '</span></div><div class="menu__sep"></div>' + menu([{ label: 'Выйти', act: 'logout' }]), { width: b.offsetWidth, align: 'right' });
         return;
       case 'logout':
         closePop(true);

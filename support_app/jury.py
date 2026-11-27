@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from .knowledge import save_answer
 from .store import Store, append_event, save_chat_message, save_chat_state
 
 
@@ -26,9 +27,17 @@ def create_jury_store(path: Path) -> Store:
 
         case = 'jury-knowledge'
         db.execute('INSERT INTO cases(id,client_hash,offer,state) VALUES (?,?,?,?)',
-                   (case, case, '{}', 'open'))
+                   (case, case, '{}', 'approved'))
         append_event(db, case, 'opened', 'Тестовый диалог для жюри')
-        save_chat_message(db, case, 'client', 'Где закрывающие документы?')
-        save_chat_message(db, case, 'agent',
-                          'Документы можно проверить в личном кабинете Store. Справка: https://docs.softline.com/ru-ru')
+        question = 'Где закрывающие документы?'
+        answer = ('Закрывающие документы по заказу проверяйте в личном кабинете Store. '
+                  'Порядок отправки документов и ЭДО описан в справке: https://store.softline.ru/delivery_info/#q7')
+        save_chat_message(db, case, 'client', question)
+        save_chat_message(db, case, 'agent', 'Передал вопрос менеджеру.')
+        append_event(db, case, 'sent_to_manager', 'closing_documents')
+        save_chat_message(db, case, 'manager', answer)
+        append_event(db, case, 'manager_decision', 'approved')
+        entry = save_answer(db, case, question, answer)
+        append_event(db, case, 'knowledge_saved', str(entry['id']))
+        save_chat_state(db, case, {'queue_reason': 'closing_documents'})
     return store
