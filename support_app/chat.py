@@ -461,6 +461,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
     if DEFERRED_PAYMENT.search(query):
         return 'По оферте действует предоплата. Индивидуальные условия может согласовать менеджер. ' + enter_queue(db, row, state, 'payment_question'), []
+    if row['state'] == 'pending' and re.search(r'скольк\w*\s+ждать|когда\s+ответ|срок\w*\s+(?:под\s+заказ|поставки)|\bжд[её]м\s+кп\b', query):
+        return 'Запрос уже у менеджера. Он уточнит условия и срок поставки и ответит в этом чате.', []
     if state.get('post_purchase') and is_closing(text):
         return ('Менеджер ответит здесь, когда проверит обращение.' if row['state'] == 'pending'
                 else 'Хорошо. Если понадобится помощь по заказу, напишите.'), []
@@ -536,6 +538,16 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if re.search(r'\b(?:windows|виндовс)\b.{0,20}(?:для\s+дома|домашн)', query) and not re.search(r'\b(?:pro|server)\b', query):
+        offer = lookup(catalog, '380389')
+        if offer and offer['available'] and offer['price_kopecks']:
+            state.update(flow=None, g_family=offer['family'], offer_id=offer['id'])
+            return (f'{offer["name"]} — {chat_price(offer["price_kopecks"])} за одну лицензию. '
+                    f'Карточка: {offer["url"]}.'), [('Подготовить КП', 'quote', '')]
+    if re.search(r'\b(?:nano\s*cad|нано\s*кад)\b', query) and not re.search(r'спдс|geonics|геоникс|конструкц|платформ', query):
+        return 'У Нанософт несколько продуктов nanoCAD. Нужна базовая платформа или отраслевой модуль, например СПДС?', []
+    if re.search(r'как\s+(?:подобрать|выбрать).{0,35}\bpdf\b|подбер\w*.{0,35}для\s+работы\s+с\s+pdf', query):
+        return 'Что нужно делать с PDF: редактировать, подписывать или распознавать сканы?', []
     if (state.get('flow') == 'cryptopro' or CRYPTO_NAME.search(query)) and re.search(r'дистрибутив|(?:где|как)\s+скачат', query):
         return ('Дистрибутив КриптоПро CSP 5.0 доступен у разработчика. Откройте раздел «Ссылки» на странице продукта, '
                 'выберите «Скачать КриптоПро CSP 5.0» и войдите в аккаунт: https://cryptopro.ru/products/csp'), JOIN_MANAGER
