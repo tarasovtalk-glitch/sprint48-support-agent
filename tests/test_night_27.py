@@ -70,8 +70,8 @@ REQ = 'ООО «Вектор», ИНН 7701234560, КПП 770101001'
 
 def approve_and_get_pdf(client, chat, monkeypatch):
     drawn = []
-    original = documents.Canvas.drawString
-    monkeypatch.setattr(documents.Canvas, 'drawString', lambda self, x, y, text, *a, **k: (drawn.append(text), original(self, x, y, text, *a, **k))[1])
+    original = documents._p  # каждая надпись КП проходит через _p — собираем текст документа
+    monkeypatch.setattr(documents, '_p', lambda text, style: (drawn.append(str(text)), original(text, style))[1])
     cid = client.get('/support/api/case', headers={'Authorization': 'Bearer ' + chat.token}).json()['id']
     row = next(c for c in client.get('/support/api/manager/cases?state=all&limit=100', headers=H).json()['cases'] if c['id'] == cid)
     assert row['quote'], row
