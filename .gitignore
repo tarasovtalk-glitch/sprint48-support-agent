@@ -15,6 +15,9 @@ token_max.conf
 __pycache__/
 *.sqlite3*
 tests/data/catalog-mini.sqlite3
-__pycache__/
 .pytest_cache/
 eval/out/
+
+# frontend
+frontend/node_modules/
+frontend/dist/
