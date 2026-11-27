@@ -26,6 +26,7 @@ from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, obse
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
+from .notify import Telegram
 from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
 from .scenario import load_scenario
 from .selection import catalog_router
@@ -166,6 +167,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     app = FastAPI(title='SMF Support', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     catalog_path = Path(os.environ.get('SUPPORT_CATALOG_DATABASE', database.with_name('catalog.sqlite3')))
+    telegram = Telegram(os.environ.get('TELEGRAM_BOT_TOKEN', ''), os.environ.get('TELEGRAM_CHAT_ID', ''),
+                        os.environ.get('SUPPORT_CABINET_URL', ''))
     app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
 
     def cabinet_role(x_manager_key: str = Header(default='')) -> str:
@@ -291,10 +294,13 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 if selected_tool:
                     append_event(db, case_id, 'model_tool_selected', ' → '.join(steps))
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
-                reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
+                before = get_case(db, case_id)
+                reply, choices = run_turn(db, before, state, catalog_path,
                                           text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,
                                           page_url=payload.page_url, tool=selected_tool)
                 case = get_case(db, case_id)
+                if before['state'] != 'pending' and case['state'] == 'pending':
+                    telegram.case_queued(case_id, state.get('queue_reason', ''), state.get('quote_frozen', state.get('quote')))
                 document_url = None
                 quote = state.get('quote_frozen', state.get('quote'))
                 if (case['state'] == 'pending' and state.get('queue_reason') == 'quote_review' and quote
