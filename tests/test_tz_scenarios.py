@@ -92,6 +92,8 @@ def test_mdaemon_standard_honest_and_quote(chat):
     assert 'не нашёл' in r['reply'] and 'Messaging Server' in r['reply']
     r = chat.say('на 20 пользователей, на год')
     assert 'MDaemon' in r['reply'] and r['buttons']
+    assert 'Ближайшая позиция — MDaemon Messaging Server.' in r['reply']
+    assert 'MDaemon Standard:' not in r['reply']
     r = chat.say(REQ)
     assert 'Черновик КП' in r['reply'] and chat.state == 'pending'
 

@@ -399,24 +399,25 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
             for group in registry_selection(catalog_db, req):
                 enriched.setdefault(group['topic'], group)
             result['groups'] = list(enriched.values())
-    shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
+    shown = [(group, offer) for group in result['groups'] for offer in group['offers'][:1]]
     state.pop('needs_quote_items', None)
     if not shown:
         state.pop('offered_ids', None)
         return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
     state['offered_ids'] = [offer['id'] for _, offer in shown]
     lines = ['Варианты по данным каталога.' + (' Все варианты есть в реестре отечественного ПО, совместимость с вашими требованиями нужно проверить.' if registry else '')]
-    if state['flow'] == 'mdaemon':
-        lines.append('Точное название Standard в каталоге не нашёл, ниже MDaemon Messaging Server.')
+    if state['flow'] == 'mdaemon' and not shown[0][0]['exact_terms_found']:
+        lines.append('Редакции MDaemon Standard в каталоге нет. Ближайшая позиция — MDaemon Messaging Server.')
     if state.get('term_assumed'):
         lines.append('Срок вы не назвали — показываю на 12 месяцев; нужен другой срок — напишите.')
     quote_items = []
-    for topic, offer in shown:
+    for group, offer in shown:
+        title = offer['name'] if state['flow'] == 'mdaemon' else f'{group["topic"]}: {offer["name"]}'
         price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
         registry_text = f', реестр № {offer["registry"]}' if registry and offer.get('registry') else ''
         units = purchasable_units(offer, state['quantity'])
         total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
-        lines += ['', f'{topic}: {offer["name"]}', f'{price}{total}{registry_text}']
+        lines += ['', title, f'{price}{total}{registry_text}']
         if offer.get('url'):
             lines.append(f'Карточка: {offer["url"]}')
         if note := (offer.get('parameters') or {}).get('Условия поставки'):
@@ -430,7 +431,7 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     def label(topic, offer):
         name = normalize(offer['name'])
         return topic if all(w[:4] in name for w in normalize(topic).split()) else offer['name'][:45]
-    return '\n'.join(lines), [('Выбрать: ' + label(topic, offer), 'select_offer', offer['id']) for topic, offer in shown]
+    return '\n'.join(lines), [('Выбрать: ' + label(group['topic'], offer), 'select_offer', offer['id']) for group, offer in shown]
 
 
 # просьба позвать человека; «согласовать через менеджера» — это вопрос, а не просьба
