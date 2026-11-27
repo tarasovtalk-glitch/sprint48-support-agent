@@ -34,6 +34,7 @@ EXPANSION_OR_MEDIA = r'продлен|миграц|renewal|upgrade|перехо�
 KASPERSKY_MAIL_SKU = 'KL4313RA'
 KASPERSKY_ENDPOINT_SKU = 'KL4863RA'
 KASPERSKY_FAMILIES = (KASPERSKY_MAIL_SKU, KASPERSKY_ENDPOINT_SKU)
+SUPPLY_NOTE = 'Поставку подтвердит менеджер.'
 # Ranges are for the annual base licence priced per address or node.
 # https://store.softline.ru/kaspersky/kaspersky-security-dlya-pochtovyih-serverov/
 # https://store.softline.ru/kaspersky/kaspersky-endpoint-security-dlya-biznesa-standartnyiy/
@@ -110,6 +111,8 @@ def add_offer(db: sqlite3.Connection, node, categories: dict[str, str]):
     min_users, max_users = user_range(title, params)
     new_purchase = not re.search(EXPANSION_OR_MEDIA, normalize(f'{title} {params.get("Тип лицензии", "")}'))
     price = price_kopecks(node.findtext('price', ''), node.findtext('currencyId', ''))
+    if price and node.get('available', '').casefold() in ('false', '0'):
+        params['Условия поставки'] = SUPPLY_NOTE
     cursor = db.execute('INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (
         offer_id, node.get('group_id') or offer_id, title, vendor, category,
         node.findtext('vendorCode', '').strip() or None,

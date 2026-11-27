@@ -63,7 +63,7 @@
   // реплика сервера {id, role, text, document_url, buttons, created} → сообщение экрана
   function toMessage(r, keepButtons) {
     var m = { seq: r.id, from: r.role, type: r.document_url ? 'file' : 'text', text: r.text || '', time: utc(r.created) };
-    if (r.document_url) m.file = { name: FILE_NAME, url: r.document_url };
+    if (r.document_url) m.file = { name: /черновик сч[её]та/i.test(r.text || '') ? 'Черновик счёта.pdf' : FILE_NAME, url: r.document_url };
     if (keepButtons && r.buttons && r.buttons.length) {
       m.buttons = r.buttons.filter(function (b) { return b && b.label && b.action; }).map(function (b, i) {
         var id = 'b' + (++pressSeq);
@@ -548,13 +548,11 @@
           { id: 'telegram', name: 'Telegram', note: 'бот магазина' },
           { id: 'max', name: 'MAX', note: 'нужна проверка компании', off: true }
         ],
-        model: 'alice',
+        model: 'active',
         models: [
-          { id: 'alice', name: m.model_name || 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' },
-          { id: 'deepseek', name: 'DeepSeek V4.1 Flash', cost: '≈300 ₽ в месяц' },
-          { id: 'yandexgpt', name: 'YandexGPT Pro 5.1', cost: '≈850 ₽ в месяц' }
+          { id: 'active', name: m.model_name || 'Модель стенда', cost: 'Оплата по токенам' }
         ],
-        model_note: 'Цена при 1 500 обращениях в месяц, по замеру на стенде.'
+        model_note: 'Токены и стоимость проверенных запросов видны в журнале.'
       };
     });
   }
@@ -580,6 +578,7 @@
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
     if (method === 'GET' && path === '/journal') return journalList();
     if (method === 'GET' && path === '/knowledge') return knowledgeView();
+    if (method === 'POST' && (path === '/jury/knowledge' || path === '/jury/knowledge/ask')) return manager(method, '/manager' + path, body);
     // правка скидки, чат менеджера с клиентом, возврат агенту, пауза и лимит, редактирование справки и настроек: в API пока нет
     return Promise.reject(fail(404));
   }

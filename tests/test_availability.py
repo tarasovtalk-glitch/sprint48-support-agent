@@ -1,5 +1,6 @@
 """Наличие по правилу заказчика (брифинг 26.11, запись 3): «все товары, где есть цена, они все считаются в наличии»;
 без цены («Запросить цену») — купить сейчас нельзя, только через менеджера."""
+import json
 import sqlite3
 
 from support_app.catalog import import_catalog
@@ -23,6 +24,8 @@ def test_price_means_available(tmp_path):
     db = sqlite3.connect(out)
     got = dict(db.execute('SELECT id, available FROM products'))
     assert got == {'1': 1, '2': 0, '3': 1}, got
+    details = json.loads(db.execute("SELECT parameters FROM products WHERE id='1'").fetchone()[0])
+    assert details['Условия поставки'] == 'Поставку подтвердит менеджер.'
 
 
 def test_composition_question_stays_on_current_product(chat):
