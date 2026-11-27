@@ -138,7 +138,7 @@ def tool_request(text: str, action: str | None, value: str, state: dict):
         return ('Клиент уточняет условия для школы по ранее названной редакции. Подтверждённой цены для школы нет.',
                 ('contact_manager',))
     if state.get('flow') == 'needs':
-        if REGISTRY_QUERY.search(query) and state.get('term') and state.get('deployment'):
+        if REGISTRY_QUERY.search(query) and state.get('quantity') and (state.get('term') or state.get('term_asked')):
             return ('Клиент спрашивает, есть ли российский аналог и запись в реестре отечественного ПО. Требования уже собраны.',
                     ('check_registry', 'search_catalog'))
         if action == 'deployment' and value in {'local', 'cloud', 'flexible'} and state.get('term') and state.get('quantity'):
@@ -391,6 +391,28 @@ def registry_selection(db, req):
         if options:
             matches.append({**group, 'offers': options})
     return matches
+
+
+def observe_tool(state: dict, catalog: Path, tool: str) -> str | None:
+    """Итог читающего инструмента для модели: только число и темы вариантов, без цен, ссылок и данных клиента."""
+    if tool not in ('search_catalog', 'check_registry') or state.get('flow') != 'needs' or not catalog.is_file():
+        return None
+    term = state.get('term') or (12 if state.get('term_asked') else None)  # как в collect_selection: срок не назван — 12 мес.
+    missing = [label for value, label in ((term, 'срок лицензии'), (state.get('quantity'), 'число пользователей')) if not value]
+    if missing:
+        return 'Поиск не выполнен: не хватает требований — ' + ', '.join(missing) + '.'
+    query = 'защита почты' if state.get('focus') == 'mail' else state.get('query') or ''
+    req = Selection(mode='needs', query=query, users=state['quantity'], term_months=term,
+                    deployment=state.get('deployment', 'flexible'), require_registry=False)
+    with closing(read_only(catalog)) as catalog_db:
+        groups = [g for g in selection_result(catalog_db, req)['groups'] if g['offers']]
+        registry = registry_selection(catalog_db, req) if tool == 'check_registry' else []
+    if not groups:
+        return 'Подходящих вариантов нет в каталоге.'
+    topics = ', '.join(g['topic'] for g in groups[:4])
+    if tool == 'search_catalog':
+        return f'Найдено групп вариантов: {len(groups)} ({topics}). Цены и суммы посчитает система.'
+    return f'С записью в реестре отечественного ПО: {len(registry)} из {len(groups)} групп ({topics}).'
 
 
 def next_clarify_field(state: dict) -> str:

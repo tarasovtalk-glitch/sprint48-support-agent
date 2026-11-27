@@ -22,11 +22,11 @@ from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units, read_only
 from .knowledge import AGENT_RULES, BUILT_IN_ARTICLES, all_answers, question_for, save_answer
-from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, run_turn, tool_request
+from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, observe_tool, run_turn, tool_request
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .model import QWEN_MODEL, choose_tool, classify
+from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
 from .scenario import load_scenario
 from .selection import catalog_router
 from .jury import create_jury_store
@@ -278,13 +278,18 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                             'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
             plan = tool_request(payload.text or '', payload.action, payload.value, existing_context)
             model_options = {'api_key': model_key, 'model_uri': model_uri, 'daily': daily_limit, 'total': total_limit}
-            selected_tool = choose_tool(store, case_id, *plan, **model_options) if plan else None
+            steps = run_agent(store, case_id, *plan, lambda name: observe_tool(existing_context, catalog_path, name),
+                              **model_options) if plan else []
+            selected_tool = steps[-1] if steps else None
             cues = intent_cues(payload.text) if payload.text and not existing_context.get('awaiting_customer') else ''
             hint = classify(store, case_id, cues, **model_options) if cues and not plan else 'unknown'
             with store.connect(write=True) as db:
                 state = chat_state(db, case_id)
+                for step in steps:  # читающие шаги цикла уже выполнены — в журнал шагов агента
+                    if step in OBSERVING_TOOLS:
+                        append_event(db, case_id, 'model_tool_executed', step)
                 if selected_tool:
-                    append_event(db, case_id, 'model_tool_selected', selected_tool)
+                    append_event(db, case_id, 'model_tool_selected', ' → '.join(steps))
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
                 reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
                                           text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,

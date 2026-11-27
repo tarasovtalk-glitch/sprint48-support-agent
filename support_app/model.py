@@ -20,7 +20,14 @@ TOOL_DESCRIPTIONS = {
     'check_registry': 'Проверить российский аналог или номер записи в реестре для подходящих вариантов.',
     'draft_quote': 'Подготовить черновик КП по выбранной позиции для проверки менеджером.',
     'contact_manager': 'Передать оператору запрос, который требует его решения.',
+    'answer_customer': 'Закончить ход: данных достаточно, ответ клиенту соберёт система по каталогу и правилам.',
 }
+# Инструменты, которые только читают каталог: их итог возвращается модели, и она выбирает следующий шаг.
+OBSERVING_TOOLS = {'search_catalog', 'check_registry'}
+AGENT_SYSTEM = ('Ты агент магазина лицензий. Решай задачу клиента по шагам: вызывай по одному инструменту, '
+                'читай результат и выбирай следующий шаг. Если вариантов в каталоге нет — передай оператору. '
+                'Когда данных достаточно — вызови answer_customer. Не выдумывай данные, цены и суммы считает система.')
+AGENT_MAX_STEPS = 4
 
 
 def completion(store: Store, case_id: str, body: dict, *, api_key: str, model_uri: str, daily: int, total: int):
@@ -93,3 +100,49 @@ def choose_tool(store: Store, case_id: str, cue: str, available: tuple[str, ...]
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
     return name if name in available and args == {} else None
+
+
+def run_agent(store: Store, case_id: str, cue: str, available: tuple[str, ...], observe, **options) -> list[str]:
+    """Многошаговый ход агента: модель ⇄ инструменты.
+
+    Модель получает только обезличенное описание шага (cue), выбирает инструмент, читающие инструменты
+    выполняются сразу (observe) и их итог без цен и персональных данных возвращается модели. Действие,
+    меняющее обращение (уточнение, черновик КП, передача менеджеру), завершает цикл и выполняется ходом
+    диалога. Возвращает выбранные шаги по порядку; пустой список — модель недоступна или ответ невалиден,
+    тогда работает путь по правилам.
+    """
+    allowed = set(available)
+    messages = [{'role': 'system', 'content': AGENT_SYSTEM}, {'role': 'user', 'content': cue}]
+    steps: list[str] = []
+    for number in range(AGENT_MAX_STEPS):
+        names = [*available, *sorted(allowed - set(available)), 'answer_customer']
+        tools = [{'type': 'function', 'function': {'name': n, 'description': TOOL_DESCRIPTIONS[n],
+                  'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}}}
+                 for n in names]
+        message = completion(store, case_id, {'messages': messages, 'tools': tools, 'tool_choice': 'auto'}, **options)
+        calls = (message or {}).get('tool_calls') or []
+        if not isinstance(calls, list) or len(calls) != 1:
+            break
+        try:
+            call = calls[0]
+            name = call['function']['name']
+            args = json.loads(call['function'].get('arguments') or '{}')
+        except (KeyError, TypeError, ValueError, AttributeError):
+            break
+        if args != {} or name == 'answer_customer' or name not in allowed or name in steps:
+            break
+        steps.append(name)
+        if name not in OBSERVING_TOOLS:
+            break
+        result = observe(name)
+        if not result:
+            break
+        if result.startswith('Подходящих вариантов нет'):
+            allowed.add('contact_manager')  # пустая выдача: модель вправе позвать человека
+        messages += [
+            {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': str(call.get('id') or f'call_{number}'), 'type': 'function',
+                'function': {'name': name, 'arguments': '{}'}}]},
+            {'role': 'tool', 'tool_call_id': str(call.get('id') or f'call_{number}'), 'content': result},
+        ]
+    return steps
