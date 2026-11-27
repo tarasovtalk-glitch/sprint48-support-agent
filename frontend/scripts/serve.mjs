@@ -35,7 +35,8 @@ http.createServer(async (req, res) => {
     up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
     req.pipe(up); return;
   }
-  let file = path.join(dir, path.normalize(p.slice(BASE.length)).replace(/^(\.\.[/\\])+/, ''));
+  const relative = p.slice(BASE.length).replace(/^softline-test\//, '');
+  let file = path.join(dir, path.normalize(relative).replace(/^(\.\.[/\\])+/, ''));
   if (!file.startsWith(dir)) { res.writeHead(403); res.end(); return; }
   try {
     if ((await stat(file)).isDirectory()) {
