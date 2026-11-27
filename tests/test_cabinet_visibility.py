@@ -49,3 +49,10 @@ def test_cabinet_shows_jury_examples_and_hides_confirmed_test_cases(tmp_path, mo
         assert metrics['total_limit_rub'] > 0 and isinstance(metrics['daily_cost_rub'], dict)
         jury_metrics = client.get(prefix + '/metrics', headers=jury).json()
         assert jury_metrics['sample'] is True and jury_metrics['cases'] == 2 and jury_metrics['handed_to_manager'] == 2
+        assert client.get(prefix + '/agent/status', headers=manager).json()['state'] == 'on'
+        assert client.post(prefix + '/agent/pause', headers=jury, json={'paused': True}).status_code == 403
+        paused = client.post(prefix + '/agent/pause', headers=manager, json={'paused': True})
+        assert paused.status_code == 200 and paused.json()['state'] == 'paused'
+        assert client.get(prefix + '/agent/status', headers=manager).json()['state'] == 'paused'
+        resumed = client.post(prefix + '/agent/pause', headers=manager, json={'paused': False})
+        assert resumed.status_code == 200 and resumed.json()['state'] == 'on'

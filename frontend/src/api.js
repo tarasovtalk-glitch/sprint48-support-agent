@@ -570,6 +570,8 @@
     }
     if (/^\/chat\/sessions\/[^/]+\/rating$/.test(path)) return Promise.resolve({}); // оценки в API пока нет
     if (method === 'GET' && path === '/access') return manager('GET', '/manager/access');
+    if (method === 'GET' && path === '/agent/status') return manager('GET', '/manager/agent/status');
+    if (method === 'POST' && path === '/agent/pause') return manager('POST', '/manager/agent/pause', body || {});
     if (method === 'GET' && path === '/agent/metrics') return loadMetrics();
     if (method === 'GET' && path === '/agent/stats') return agentStats();
     if (method === 'GET' && path === '/agent/settings') return agentSettings();

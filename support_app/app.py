@@ -22,7 +22,7 @@ from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units, read_only
 from .knowledge import AGENT_RULES, BUILT_IN_ARTICLES, all_answers, question_for, save_answer
-from .chat import buttons, customer_text, intent_cues, lookup, run_turn, tool_request
+from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, run_turn, tool_request
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
@@ -31,8 +31,8 @@ from .scenario import load_scenario
 from .selection import catalog_router
 from .jury import create_jury_store
 from .store import (
-    Store, append_event, case_view, chat_state, queue_mail,
-    read_chat_messages, save_chat_message, save_chat_state,
+    Store, append_event, case_view, chat_state, get_setting, queue_mail,
+    read_chat_messages, save_chat_message, save_chat_state, set_setting,
 )
 
 
@@ -77,6 +77,10 @@ class KnowledgeEntry(BaseModel):
     confirmed: StrictBool
     question: str | None = Field(default=None, max_length=1000)
     answer: str | None = Field(default=None, max_length=1000)
+
+
+class AgentPause(BaseModel):
+    paused: StrictBool
 
 
 def require_key(expected: str, supplied: str):
@@ -247,6 +251,17 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 raise HTTPException(422, 'This stand accepts chat messages only.')
             with store.connect() as db:
                 existing_context = chat_state(db, case_id)
+                paused = get_setting(db, 'agent_paused') == '1'
+            if paused:
+                with store.connect(write=True) as db:
+                    state = chat_state(db, case_id)
+                    client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
+                    enter_queue(db, get_case(db, case_id), state, 'customer_request')
+                    save_chat_state(db, case_id, state)
+                    reply = 'Агент сейчас на паузе. Передал ваше сообщение менеджеру — он скоро ответит в этом чате.'
+                    agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=[])
+                    return {'reply': reply, 'intent': 'chat', 'document_url': None, 'buttons': [],
+                            'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
             plan = tool_request(payload.text or '', payload.action, payload.value, existing_context)
             model_options = {'api_key': model_key, 'model_uri': model_uri, 'daily': daily_limit, 'total': total_limit}
             selected_tool = choose_tool(store, case_id, *plan, **model_options) if plan else None
@@ -339,6 +354,33 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     @app.get(PREFIX + '/manager/access')
     def manager_access(role: str = Depends(cabinet_role)):
         return {'role': role}
+
+    @app.get(PREFIX + '/manager/agent/status')
+    def agent_status(reader: Store = Depends(cabinet_reader)):
+        if reader is jury_store:
+            return {'state': 'on', 'since': ''}
+        today_iso = datetime.now(timezone(timedelta(hours=3))).date().isoformat()
+        with reader.connect() as db:
+            paused = get_setting(db, 'agent_paused') == '1'
+            since = get_setting(db, 'paused_since')
+            total_cost, today_cost = db.execute('''
+                SELECT COALESCE(SUM(cost_microrubles), 0),
+                       COALESCE(SUM(CASE WHEN day=? THEN cost_microrubles ELSE 0 END), 0)
+                FROM model_usage WHERE input_tokens IS NOT NULL
+            ''', (today_iso,)).fetchone()
+        if paused:
+            return {'state': 'paused', 'since': since}
+        if total_cost >= total_limit or today_cost >= daily_limit:
+            return {'state': 'limit', 'since': ''}
+        return {'state': 'on', 'since': ''}
+
+    @app.post(PREFIX + '/manager/agent/pause', dependencies=[Depends(manager)])
+    def agent_pause(payload: AgentPause):
+        since = datetime.now(timezone(timedelta(hours=3))).strftime('%H:%M') if payload.paused else ''
+        with store.connect(write=True) as db:
+            set_setting(db, 'agent_paused', '1' if payload.paused else '0')
+            set_setting(db, 'paused_since', since)
+        return {'state': 'paused' if payload.paused else 'on', 'since': since}
 
     @app.get(PREFIX + '/manager/metrics')
     def manager_metrics(reader: Store = Depends(cabinet_reader)):

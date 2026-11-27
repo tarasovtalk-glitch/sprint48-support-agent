@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS knowledge (
     source_case TEXT NOT NULL REFERENCES cases(id),
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 '''
 
 
@@ -136,6 +140,15 @@ class Store:
 
 def append_event(db: sqlite3.Connection, case_id: str, event: str, detail: str = ''):
     db.execute('INSERT INTO journal(case_id,event,detail) VALUES (?,?,?)', (case_id, event, detail))
+
+
+def get_setting(db: sqlite3.Connection, key: str, default: str = '') -> str:
+    row = db.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+    return row['value'] if row else default
+
+
+def set_setting(db: sqlite3.Connection, key: str, value: str):
+    db.execute('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
 
 
 def chat_state(db, case_id: str) -> dict:

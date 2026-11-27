@@ -135,11 +135,13 @@
         : tab === 'knowledge' ? load('knowledge', '/knowledge', SAMPLE.knowledge)
         : Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]);
       var extra = store.settings ? Promise.resolve(store.settings) : load('settings', '/agent/settings', SAMPLE.settings);
-      return Promise.all([ready, extra]).then(function (pair) {
+      var statusReq = (DEMO || store.statusLoaded) ? Promise.resolve(store.status)
+        : load('status', '/agent/status', SAMPLE.status).then(function (st) { store.statusLoaded = true; return st; });
+      return Promise.all([ready, extra, statusReq]).then(function (pair) {
         if (version !== renderVersion) return;
         var data = pair[0];
-        if (!DEMO && tab === 'agent' && store.stats) {
-          store.status = { state: store.stats.budget_exceeded ? 'limit' : 'on' };
+        if (!DEMO && tab === 'agent' && store.stats && store.stats.budget_exceeded && (!store.status || store.status.state !== 'paused')) {
+          store.status = { state: 'limit' };
         }
         var ok = tab === 'journal' ? !!store.journal
           : tab === 'agent' ? !!(store.stats && store.settings)
@@ -213,12 +215,9 @@
     var n = queue().length, c = $('#todayCounter');
     c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
     var st = status().state, h;
-    if (!DEMO) {
-      h = !loggedIn ? '' : st === 'limit'
-        ? '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '</div>'
-        : '<div class="status status--plain">' + badge('success', 'Агент работает') + '</div>';
-    }
-    else if (st === 'limit') h = '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '<button class="btn btn--accent" type="button" data-act="limit">Поднять лимит</button></div>';
+    if (!loggedIn) h = '';
+    else if (jury) h = '<div class="status status--plain">' + badge(st === 'limit' ? 'danger' : 'success', st === 'limit' ? 'Лимит потрачен' : 'Агент работает') + '</div>';
+    else if (st === 'limit') h = '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + (DEMO ? '<button class="btn btn--accent" type="button" data-act="limit">Поднять лимит</button>' : '') + '</div>';
     else if (st === 'down') h = '<div class="status status--plain">' + badge('danger', 'Агент не отвечает, чаты ведут менеджеры') + '</div>';
     else if (st === 'paused') h = '<div class="status status--paused"><span>Агент на паузе</span><button class="switch switch--agent" type="button" role="switch" aria-checked="false" aria-label="Включить агента" data-act="resume"></button></div>';
     else h = '<div class="status"><span>Агент работает</span><button class="switch switch--agent" type="button" role="switch" aria-checked="true" aria-label="Поставить агента на паузу" data-act="pause"></button></div>';
@@ -1114,7 +1113,10 @@
     }).then(function () { d.say = ''; render().then(function () { var b = $('#talk-' + c.id); if (b) b.lastElementChild && b.lastElementChild.scrollIntoView({ block: 'nearest' }); }); }, function () {});
   }
   function setStatus(next, msg) {
-    act('status', 'POST', '/agent/pause', { paused: next.state === 'paused' }, function () { store.status = next; }).then(function () { toast(msg); renderTop(); render(); }, function () {});
+    act('status', 'POST', '/agent/pause', { paused: next.state === 'paused' }, function (res) {
+      store.status = res && res.state ? res : next;
+      store.statusLoaded = true;
+    }).then(function () { toast(msg); renderTop(); render(); }, function () {});
   }
 
   /* ---------- проверка разговора из журнала ---------- */

@@ -14,6 +14,40 @@ def test_cryptopro_19_workstations_quote(chat):
     assert '70 300 ₽' in r['reply'] and chat.state == 'pending'
 
 
+def test_cryptopro_text_computer_and_44fz_tender(client):
+    from eval.local import Chat
+    c1 = Chat(client)
+    c1.say('Нужен КриптоПро CSP 5.0')
+    r = c1.say('бессрочную, на один компьютер, windows')
+    assert '3 700 ₽' in r['reply'] and 'рабочие места или на сервер' not in r['reply']
+
+    c2 = Chat(client)
+    c2.say('Нужен КриптоПро CSP')
+    r = c2.say('закупка по 44-ФЗ')
+    assert c2.state == 'pending' and 'менеджер' in r['reply'].lower()
+
+
+def test_post_purchase_keeps_context_and_closing_has_no_question(client):
+    from eval.local import Chat
+    c1 = Chat(client)
+    r1 = c1.say('не могу скачать дистрибутив из кабинета, ссылка не открывается')
+    assert 'браузер' in r1['reply'].lower() and c1.state == 'open'
+    r2 = c1.say('другой браузер тоже не открывает')
+    assert c1.state == 'pending' and 'Яндекс Браузер' not in r2['reply']
+
+    c2 = Chat(client)
+    r1 = c2.say('счёт на оплату не пришёл на почту, хотя заказ оформлен')
+    assert 'спам' in r1['reply'].lower() and 'кабинет' in r1['reply'].lower()
+    r2 = c2.say('в спаме нет и в кабинете пусто')
+    assert c2.state == 'pending' and 'Какой продукт' not in r2['reply']
+
+    c3 = Chat(client)
+    r = c3.say('нашёл, спасибо')
+    assert '?' not in r['reply']
+    r = c3.say('жду ответа')
+    assert '?' not in r['reply']
+
+
 def test_mdaemon_standard_honest_and_quote(chat):
     r = chat.say('Нужен MDaemon Standard')
     assert 'не нашёл' in r['reply'] and 'Messaging Server' in r['reply']

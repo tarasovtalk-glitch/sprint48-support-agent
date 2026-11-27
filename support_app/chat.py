@@ -6,7 +6,9 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .dialog import CORRECTION, catalog_turn, digits, multi_quote, quantity, support_topic, units_for
+from .dialog import (
+    CORRECTION, catalog_turn, digits, is_closing, multi_quote, quantity, support_topic, units_for,
+)
 from .catalog import discounted, find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
 from .selection import Selection, selection_result
@@ -481,17 +483,25 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if known:  # менеджер уже отвечал на такой вопрос и сохранил общий ответ в базу знаний
         return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
                 + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
-    if (row['state'] == 'pending' and text and state.get('queue_reason') in ('order_question', 'activation_problem')
-            and ORDER_DETAILS.search(query) and not EXTRA_PURCHASE.search(query)):
-        # бот сам попросил номер заказа и текст ошибки — принимаем их в обращение, а не ищем товар по цифрам
+    if (row['state'] == 'pending' and text and state.get('queue_reason') in ('order_question', 'activation_problem', 'payment_question', 'closing_documents')
+            and (ORDER_DETAILS.search(query) or state.get('post_purchase') or re.search(r'плат[её]жк|спам|кабинет|браузер|ссылк|чек|квитанц|скрин|приложи|скинут|отправит', query))
+            and not is_closing(text) and not EXTRA_PURCHASE.search(query)):
+        # бот сам попросил детали по заказу — принимаем их в обращение, а не ищем товар по случайным словам
         append_event(db, row['id'], 'customer_details', 'order')
-        return 'Спасибо, добавил к обращению. Менеджер увидит номер заказа и ответит здесь.', []
+        return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
     topic = support_topic(query) if text and not action and not state.get('awaiting_customer') else None
     if topic:   # «купил КриптоПро, не активируется ключ» — вопрос по заказу, а не новая продажа
         answer, reason = topic
+        state['post_purchase'] = True
         if EXTRA_PURCHASE.search(query):   # «…и ещё нужен Office на 5 мест» — вторую часть не теряем
             answer += 'Покупку из вашего сообщения посчитаю отдельно — напишите её следующим сообщением. '
         return (answer + enter_queue(db, row, state, reason), []) if reason else (answer, JOIN_MANAGER)
+    if (state.get('post_purchase') and text and not action and not is_closing(text)
+            and not EXTRA_PURCHASE.search(query) and not QUOTE_REQUISITES.search(text)):
+        if row['state'] == 'pending':
+            append_event(db, row['id'], 'customer_details', 'order')
+            return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
+        return 'Понял, передаю ваш вопрос по заказу менеджеру — он проверит и ответит в этом чате. ' + enter_queue(db, row, state, 'order_question'), []
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
@@ -529,7 +539,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['offer_id'] = offers[0]
             remember_quote_customer(state, text)
             return queue_quote(db, row, state, catalog)
-    if re.search(r'оператор|тендер|госзакупк', query):
+    if re.search(r'44\s*-?\s*фз|223\s*-?\s*фз|тендер|госзакупк|котировк|проект\w*\s+(?:контракт|договор)', query):
+        return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
+    if re.search(r'оператор', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
         hint = ('По заказам юрлиц документы (счёт, УПД или акт) высылают по почтовому адресу из заказа; через ЭДО — заявка менеджеру или на '
@@ -620,11 +632,14 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             field = next_clarify_field(state)
             append_event(db, row['id'], 'model_tool_executed', f'{tool}:{field}' if field else tool)
             return collect_selection(state, catalog, db, row['id'])
+    workstation_hint = bool(re.search(
+        r'\d+\s*мест|рабоч\w*\s+мест|рабоч\w*\s+станц|\bкомпьютер\w*|\bпк\b|ноутбук\w*|windows|виндовс|на\s+одн[оау]\w*\s+(?:машин|пк|комп|устройств)',
+        query,
+    ))
     if state.get('flow') == 'cryptopro' and not state.get('offer_id') and action != 'placement' and not re.search(r'сервер', query) and (
-            re.search(r'\d+\s*мест|рабоч\w*\s+мест|рабоч\w*\s+станц', query)
-            or (re.search(r'\bcsp\b|\bксп\b|5\.0', query) and re.search(r'бессроч', query))):
+            workstation_hint or (re.search(r'\bcsp\b|\bксп\b|5\.0', query) and re.search(r'бессроч', query))):
         action, value = 'placement', 'workstation'
-    if action == 'placement' or (state.get('flow') == 'cryptopro' and re.search(r'рабоч\w*\s+мест|\bсервер\w*', query)):
+    if action == 'placement' or (state.get('flow') == 'cryptopro' and (workstation_hint or re.search(r'\bсервер\w*', query))):
         placement = value if action == 'placement' else 'server' if 'сервер' in query else 'workstation'
         if placement == 'server':
             return 'Для сервера нужна другая позиция. ' + enter_queue(db, row, state, 'server_license'), []
@@ -656,7 +671,10 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if state.get('offer_id') and state.get('quantity'):
             state['awaiting_customer'] = True
             return QUOTE_CUSTOMER_PROMPT, []
-        return 'Лицензии КриптоПро нужны на рабочие места или на сервер?', WORKPLACE_CHOICES
+        if not state.get('crypto_placement_asked'):
+            state['crypto_placement_asked'] = True
+            return 'Лицензии КриптоПро нужны на рабочие места или на сервер?', WORKPLACE_CHOICES
+        state['flow'] = None
     if state.get('flow') in ('needs', 'mdaemon'):
         if action == 'term' and value in {'12', '24'}:
             state['term'] = int(value)
