@@ -37,7 +37,8 @@
   if (!NEW) { var css = document.querySelector('link[href$="chat/chat.css"]'); if (css) css.href = css.href.replace('chat.css', 'chat-now.css'); }
   else TOPICS = TOPICS.map(function (t) { return t === 'Google WorkSpace' ? 'Google Workspace' : t; });
   var AV = { agent: '<span class="slc-av slc-av--body">' + I.sofl + '</span>', manager: '<span class="slc-av slc-av--body">' + I.person + '</span>' };
-  function avHtml(a) { return NEW ? (a === I.person ? AV.manager : AV.agent) : a; }
+  // аватар строки чата: в обычном окне это значок в рамке 24 px, как у сообщений; без рамки svg растягивается на всю ширину
+  function avHtml(a) { return NEW ? (a === I.person ? AV.manager : AV.agent) : '<span class="slc-msg__avatar">' + a + '</span>'; }
   I.bubble2 = '<svg viewBox="0 0 28 26" aria-hidden="true"><path d="M4 1h20a3 3 0 0 1 3 3v13a3 3 0 0 1-3 3H11l-6 5v-5H4a3 3 0 0 1-3-3V4a3 3 0 0 1 3-3z" fill="#c60b46"/><path d="M8 8h12M8 13h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
   I.mic = '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="6.25" y="1.75" width="5.5" height="9" rx="2.75"/><path d="M3.5 8.5a5.5 5.5 0 0 0 11 0M9 14v2.5"/></svg>';
   I.x = '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg>';
