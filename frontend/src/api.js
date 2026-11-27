@@ -227,6 +227,8 @@
   }
 
   // шаги агента из журнала обращения: время и что сделано, одной строкой на событие
+  // в ходе работы агента только живые слова: служебные названия событий, полей и причин наружу не выходят
+  var HANDOFF = { not_in_catalog: 'товара нет в каталоге', model_routing: 'вопрос для человека' };
   var TOOL = { clarify_requirements: 'уточнил требования', search_catalog: 'искал в каталоге', check_registry: 'проверил реестр', draft_quote: 'собрал черновик КП', contact_manager: 'передал менеджеру' };
   function stepText(e) {
     var d = e.detail || '';
@@ -236,7 +238,14 @@
       case 'registry_lookup': return 'проверил реестр';
       case 'quote_amount_calculated': return 'посчитал сумму ' + money(+d / 100);
       case 'price_calculated': return 'посчитал цену';
-      case 'sent_to_manager': return d === 'quote_review' ? 'передал КП менеджеру на проверку' : 'передал менеджеру' + (REASON[d] ? ': ' + REASON[d].title.charAt(0).toLowerCase() + REASON[d].title.slice(1) : '');
+      case 'sent_to_manager': return d === 'quote_review' ? 'передал КП менеджеру на проверку' : 'передал менеджеру' + (HANDOFF[d] ? ': ' + HANDOFF[d] : REASON[d] ? ': ' + REASON[d].title.charAt(0).toLowerCase() + REASON[d].title.slice(1) : '');
+      case 'document_prepared': return d === 'invoice' ? 'подготовил черновик счёта' : d === 'quote' ? 'подготовил КП' : '';
+      case 'rule_applied': return 'применил правило по договору';
+      case 'contract_rule_saved': return 'запомнил решение для договора';
+      case 'product_comparison': return d === 'cryptopro_vipnet' ? 'сравнил КриптоПро и ViPNet' : 'сравнил продукты';
+      case 'requirements_understood': return d === 'software_protection' ? 'понял: нужна защита ПО' : '';
+      case 'demo_email_delivered': return 'отправил письмо на почту';
+      case 'demo_email_failed': return 'письмо не ушло, нужен менеджер';
       case 'demo_coupon_offered': return 'предложил купон ' + d + '%';
       case 'model_unavailable': return 'модель не ответила, ответил по правилам';
       case 'model_budget_exceeded': return 'лимит модели потрачен, ответил по правилам';
