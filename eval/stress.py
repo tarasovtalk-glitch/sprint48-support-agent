@@ -67,8 +67,9 @@ def check(client, dialogs, db):
             if not reply.strip():
                 stats['пустых'] += 1
                 bad.append((name, 'пусто', t[:80], ''))
-            if reply.count('?') > 1:
+            if re.sub(r'https?://\S+', '', reply).count('?') > 1:   # «?» в ссылке — не вопрос
                 stats['два вопроса'] += 1
+                bad.append((name, 'два вопроса', t[:80], reply[:160]))
             if 'Для задачи «' in reply or ANALOG_FRAME.search(reply) or 'store.softline.ru' in said or SKU.search(normalize(said)):
                 continue   # раздел каталога, аналог по таблице замен, ссылка или артикул — связь задана явно
             fixed = fix_typos(db, said)
