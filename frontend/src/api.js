@@ -142,6 +142,8 @@
     price_confirmation: { title: 'Уточнить цену', why: 'В каталоге нет цены или позиция недоступна.' },
     catalog_unavailable: { title: 'Позиции нет в каталоге', why: 'Агент не нашёл позицию, клиенту нужна замена.' }
   };
+  // группа в очереди «Ждут решения»: что решить менеджеру, коротко
+  var GROUP = { discount_over_limit: 'Скидка больше 5%', customer_request: 'Просят менеджера', server_license: 'Лицензия на сервер', price_confirmation: 'Уточнить цену', catalog_unavailable: 'Нет в каталоге' };
   var ANSWER_EFFECT = 'Ответ уйдёт клиенту в этот же чат **от имени менеджера**, обращение закроется.';
   // срок ответа: агент обещает клиенту ответ менеджера через 2 минуты после последней реплики
   var ANSWER_MIN = 2;
@@ -163,7 +165,7 @@
     };
     if (q) {
       var offer = q.offer || {}, qty = q.quantity || 1, price = offer.price_kopecks != null ? offer.price_kopecks / 100 : (q.amount_kopecks || 0) / 100 / qty;
-      c.kind = 'quote'; c.deadline_label = 'Отправить до';
+      c.kind = 'quote'; c.deadline_label = 'Отправить до'; c.group = 'КП на отправку';
       c.queue_title = q.items && q.items.length > 1 ? 'КП на ' + q.items.length + ' позиции' : 'КП на ' + shortName(offer.name);
       c.title = who + ': ' + c.queue_title;
       c.amount_rub = rub(q.amount_kopecks || 0);
@@ -179,7 +181,7 @@
       };
       c.effect = 'После отправки клиент получит в этот же чат **КП файлом PDF**.';
     } else {
-      c.kind = 'answer'; c.deadline_label = 'Ответ до';
+      c.kind = 'answer'; c.deadline_label = 'Ответ до'; c.group = GROUP[v.reason] || 'Другие запросы';
       c.queue_title = c.title = why.title;
       c.facts = [['Клиент', who]];
       c.reply_draft = '';
@@ -318,7 +320,8 @@
     it.title = q || REASON[v.reason] ? c.queue_title : first ? '«' + first + '»' : 'Разговор с агентом';
     if (v.state === 'pending') { it.case_id = v.id; it.status = { tone: 'neutral', text: 'Ждёт ответа', open: true }; return it; }
     closeCase(c, v);
-    if (!q && !REASON[v.reason]) c.title = it.title;
+    // в карточке слова клиента стоят под заголовком, поэтому заголовок их не повторяет: агент вёл разговор сам
+    if (!q && !REASON[v.reason]) c.title = 'Разговор с агентом';
     it.detail = c;
     it.status = { tone: c.done_tone, text: c.done_label.replace(/ в \d{1,2}:\d{2}$/, '') };
     return it;

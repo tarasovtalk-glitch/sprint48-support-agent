@@ -12,7 +12,7 @@ window.CABINET_DEMO = (function () {
   /* ---------- «Сегодня»: очередь решений ---------- */
   var cases = [
     {
-      id: 'luch', kind: 'deferral', status: 'waiting', deadline: '10:05', deadline_label: 'Ответ до',
+      id: 'luch', group: 'Отсрочка оплаты', kind: 'deferral', status: 'waiting', deadline: '10:05', deadline_label: 'Ответ до',
       queue_title: 'Отсрочка оплаты на Kaspersky, 40 узлов',
       title: 'ООО «Луч»: отсрочка оплаты на Kaspersky, 40 узлов',
       client: 'ООО «Луч»', initials: 'Л', owner: { name: 'Ирина', initials: 'И' },
@@ -30,7 +30,7 @@ window.CABINET_DEMO = (function () {
       ]
     },
     {
-      id: 'north', kind: 'quote', status: 'waiting', deadline: '10:08', deadline_label: 'Отправить до',
+      id: 'north', group: 'КП на отправку', kind: 'quote', status: 'waiting', deadline: '10:08', deadline_label: 'Отправить до',
       queue_title: 'КП на MDaemon',
       title: 'ООО «Северная линия»: КП на MDaemon',
       client: 'ООО «Северная линия»', initials: 'СЛ',
@@ -62,7 +62,7 @@ window.CABINET_DEMO = (function () {
       sent: { talk: a('КП готово. Цена действует до 10 декабря, предоплата по оферте. Файл: КП MDaemon Messaging Server, 50 пользователей.pdf') }
     },
     {
-      id: 'discount', kind: 'answer', status: 'waiting', deadline: '10:08', deadline_label: 'Ответ до',
+      id: 'discount', group: 'Скидка больше 5%', kind: 'answer', status: 'waiting', deadline: '10:08', deadline_label: 'Ответ до',
       queue_title: 'Скидка 10% на MDaemon и антивирус',
       title: 'Скидка 10% на MDaemon и антивирус',
       client: 'Посетитель сайта', initials: 'К',
@@ -93,7 +93,7 @@ window.CABINET_DEMO = (function () {
       }
     },
     {
-      id: 'spam', kind: 'answer', status: 'waiting', deadline: '10:08', deadline_label: 'Ответ до',
+      id: 'spam', group: 'Нет ответа в справке', kind: 'answer', status: 'waiting', deadline: '10:08', deadline_label: 'Ответ до',
       queue_title: 'Входит ли в MDaemon защита от спама',
       title: 'Входит ли в MDaemon защита от спама',
       client: 'Посетитель сайта', initials: 'К',
@@ -122,7 +122,7 @@ window.CABINET_DEMO = (function () {
       }
     },
     {
-      id: 'tender', kind: 'answer', status: 'waiting', deadline: '10:09', deadline_label: 'Ответ до',
+      id: 'tender', group: 'Просят менеджера', kind: 'answer', status: 'waiting', deadline: '10:09', deadline_label: 'Ответ до',
       queue_title: 'Госзакупка: три КП на КриптоПро CSP',
       title: 'Госзакупка: три КП на КриптоПро CSP',
       client: 'Посетитель сайта', initials: 'К',
@@ -299,7 +299,7 @@ window.CABINET_DEMO = (function () {
   var settings = {
     limit_rub: 1000, warn_rub: 800, answer_min: 2, days: 'Пн–пт', from: '9:00', to: '18:00',
     notify: true, channel: 'telegram',
-    channels: [{ id: 'telegram', name: 'Telegram', note: 'бот магазина' }, { id: 'max', name: 'MAX', note: 'нужна подтверждённая организация', off: true }],
+    channels: [{ id: 'telegram', name: 'Telegram', note: 'бот магазина' }, { id: 'max', name: 'MAX', note: 'нужна проверка компании', off: true }],
     model: 'alice',
     models: [
       { id: 'alice', name: 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' },
