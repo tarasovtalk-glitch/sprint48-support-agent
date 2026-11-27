@@ -230,7 +230,7 @@
     else if (st === 'paused') h = '<div class="status status--paused"><span>Агент на паузе</span><button class="switch switch--agent" type="button" role="switch" aria-checked="false" aria-label="Включить агента" data-act="resume"></button></div>';
     else h = '<div class="status"><span>Агент работает</span><button class="switch switch--agent" type="button" role="switch" aria-checked="true" aria-label="Поставить агента на паузу" data-act="pause"></button></div>';
     $('#agentStatus').innerHTML = h;
-    var note = store.role === 'jury' ? 'Доступ жюри · учебные обращения, только просмотр' : '';
+    var note = store.role === 'jury' ? 'Учебный кабинет жюри' : '';
     var el = $('#notice'); el.hidden = !note; el.innerHTML = note ? badge('neutral', note) : '';
   }
 
@@ -567,7 +567,7 @@
     var match = function (x) { return !q || (x.title + ' ' + (x.meta || '') + ' ' + (x.text || '')).toLowerCase().indexOf(q) >= 0; };
     var rules = (k.rules || []).filter(match), arts = (k.articles || []).filter(match);
     var shownArts = ui.kAll || q ? arts : arts.slice(0, 5);
-    var left = '<section class="panel panel--fit" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
+    var left = store.role === 'jury' ? viewJuryPractice() : '<section class="panel panel--fit" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
       (pending.length + gaps.length + fixes.length ? '<div class="groups" data-scroll="kleft">' +
         (pending.length ? kGroup('pending', 'Ответы для справки', pending.length, pending.map(function (p) { return plate('kpending', p); }).join('')) : '') +
         (gaps.length ? kGroup('gaps', 'Темы без ответа', gaps.length, gaps.map(function (g) { return plate('kgap', g, g.share); }).join('')) : '') +
@@ -580,6 +580,38 @@
       '</div>' + (!q && !ui.kAll && arts.length > 5 && ui.kOpen.arts !== false ? '<div><button class="btn btn--grey" type="button" data-act="kall">Все статьи</button></div>' : '') + '</section>';
     return '<div class="knowledge">' + left + right + '</div>';
   }
+
+  var juryPractice = { question: 'Как получить копию закрывающих документов?', answer: '', next: 'Как получить копию закрывающих документов?', result: '', saved: false };
+  function viewJuryPractice() {
+    var p = juryPractice;
+    return '<section class="panel pane" data-scroll="jury-practice"><h2 class="h2">Проверить память агента</h2>' +
+      '<form class="reply" data-jury-practice="remember"><label class="label">Вопрос клиента<input class="field" required name="question" maxlength="400" value="' + esc(p.question) + '"></label>' +
+      '<label class="label">Ответ менеджера<textarea class="field" required name="answer" maxlength="400" rows="3">' + esc(p.answer) + '</textarea></label>' +
+      '<button class="btn btn--accent" type="submit">Ответить и запомнить</button></form><hr class="dash">' +
+      '<form class="reply" data-jury-practice="ask"><label class="label">Вопрос в новом диалоге<input class="field" required name="next" maxlength="400" value="' + esc(p.next) + '"></label>' +
+      '<button class="btn btn--grey" type="submit"' + (p.saved ? '' : ' disabled') + '>Спросить агента</button></form>' +
+      '<p class="effect" role="status">' + t(p.result) + '</p></section>';
+  }
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target, action = form.getAttribute('data-jury-practice');
+    if (!action) return;
+    event.preventDefault();
+    var data = new FormData(form), p = juryPractice, remember = action === 'remember';
+    var button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    if (remember) {
+      p.question = String(data.get('question')).trim();
+      p.answer = String(data.get('answer')).trim();
+    } else p.next = String(data.get('next')).trim();
+    call('POST', '/jury/knowledge' + (remember ? '' : '/ask'), remember ? {confirmed:true, question:p.question, answer:p.answer} : {text:p.next})
+      .then(function (reply) {
+        if (remember) { p.saved = true; p.next = p.question; p.result = 'Ответ сохранён. Теперь задайте вопрос в новом диалоге.'; }
+        else p.result = (reply.remembered ? 'Ответ из базы знаний. ' : '') + reply.reply;
+      }, function (error) {
+        p.result = error.status === 409 ? 'Введите общий ответ без персональных данных и уточните вопрос.' : 'Не удалось выполнить действие. Повторите попытку.';
+      }).finally(function () { if (ui.tab === 'knowledge') render(); });
+  });
   function byId(list, id) { return (list || []).filter(function (x) { return x.id === id; })[0]; }
   function without(list, id) { return (list || []).filter(function (x) { return x.id !== id; }); }
 

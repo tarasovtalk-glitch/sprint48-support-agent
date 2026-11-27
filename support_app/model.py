@@ -11,7 +11,8 @@ INTENTS = {'price', 'quote', 'invoice', 'deferral', 'selection', 'help', 'handof
 INPUT_RATE = 100
 OUTPUT_RATE = 200
 MAX_OUTPUT = 72
-RESERVE = 4096 * INPUT_RATE + MAX_OUTPUT * OUTPUT_RATE
+QWEN_MODEL = 'qwen3.6-35b-a3b'
+QWEN_RATE = (200, 300)  # ₽ за миллион токенов с НДС, без скидки за кеш и инструменты
 MOSCOW = timezone(timedelta(hours=3))
 TOOL_DESCRIPTIONS = {
     'clarify_requirements': 'Уточнить оставшиеся требования перед поиском лицензий.',
@@ -25,8 +26,10 @@ TOOL_DESCRIPTIONS = {
 def completion(store: Store, case_id: str, body: dict, *, api_key: str, model_uri: str, daily: int, total: int):
     if not api_key or not model_uri:
         return None
+    qwen = model_uri.rstrip('/').endswith('/' + QWEN_MODEL)
+    input_rate, output_rate = QWEN_RATE if qwen else (INPUT_RATE, OUTPUT_RATE)
     day = datetime.now(MOSCOW).date().isoformat()
-    reservation = store.reserve_model(case_id, day, RESERVE, daily, total)
+    reservation = store.reserve_model(case_id, day, 4096 * input_rate + MAX_OUTPUT * output_rate, daily, total)
     if reservation is None:
         return None
 
@@ -34,6 +37,7 @@ def completion(store: Store, case_id: str, body: dict, *, api_key: str, model_ur
         'model': model_uri,
         'max_tokens': MAX_OUTPUT,
         'temperature': 0,
+        **({'reasoning_effort': 'none'} if qwen else {}),
         **body,
     }).encode()
     request = Request('https://ai.api.cloud.yandex.net/v1/chat/completions', data=body, headers={
@@ -52,7 +56,7 @@ def completion(store: Store, case_id: str, body: dict, *, api_key: str, model_ur
         with store.connect(write=True) as db:
             append_event(db, case_id, 'model_unavailable')
         return None
-    store.record_model(reservation, input_tokens, output_tokens, input_tokens * INPUT_RATE + output_tokens * OUTPUT_RATE)
+    store.record_model(reservation, input_tokens, output_tokens, input_tokens * input_rate + output_tokens * output_rate)
     return message if isinstance(message, dict) else None
 
 

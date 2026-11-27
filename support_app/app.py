@@ -26,7 +26,7 @@ from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, run_
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .model import choose_tool, classify
+from .model import QWEN_MODEL, choose_tool, classify
 from .scenario import load_scenario
 from .selection import catalog_router
 from .jury import create_jury_store
@@ -79,6 +79,10 @@ class KnowledgeEntry(BaseModel):
     answer: str | None = Field(default=None, max_length=1000)
 
 
+class JuryQuestion(BaseModel):
+    text: str = Field(min_length=1, max_length=400)
+
+
 class AgentPause(BaseModel):
     paused: StrictBool
 
@@ -125,7 +129,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         raise ValueError('Invalid hidden test case configuration.')
     hidden_ids = json.dumps(hidden_cases)
     jury_directory = TemporaryDirectory(prefix='support-jury-') if 'jury' in access_keys.values() else None
-    jury_store = create_jury_store(Path(jury_directory.name) / 'sample.sqlite3') if jury_directory else None
+    jury_stores = {digest: create_jury_store(Path(jury_directory.name) / (digest + '.sqlite3'))
+                   for digest, role in access_keys.items() if role == 'jury'} if jury_directory else {}
     model_key = os.environ.get('YANDEX_API_KEY', '')
     model_uri = os.environ.get('YANDEX_MODEL_URI', '')
     daily_limit = int(os.environ.get('SUPPORT_DAILY_BUDGET_RUB', '50')) * 1_000_000
@@ -166,16 +171,19 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         require_key(manager_key, x_manager_key)
         return 'admin'
 
-    def cabinet_reader(role: str = Depends(cabinet_role)) -> Store:
+    def cabinet_reader(role: str = Depends(cabinet_role), x_manager_key: str = Header(default='')) -> Store:
         if role == 'jury':
-            if jury_store is None:
-                raise HTTPException(503, 'Jury samples are unavailable.')
-            return jury_store
+            return jury_stores[token_hash(x_manager_key)]
         return store
+
+    def jury_practice(reader: Store = Depends(cabinet_reader)) -> Store:
+        if reader is store:
+            raise HTTPException(403, 'A jury key is required for the exercise.')
+        return reader
 
     def manager(role: str = Depends(cabinet_role)):
         if role == 'jury':
-            raise HTTPException(403, 'Jury access is read only.')
+            raise HTTPException(403, 'A staff key is required for this action.')
 
     def admin(role: str = Depends(cabinet_role)):
         if role != 'admin':
@@ -280,7 +288,9 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
                 return {'reply': reply, 'intent': 'chat', 'document_url': None, 'buttons': reply_buttons,
                         'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
-        intent = payload.action or classify(store, case_id, payload.text, api_key=model_key, model_uri=model_uri, daily=daily_limit, total=total_limit)
+        cues = intent_cues(payload.text) if payload.text else ''
+        intent = payload.action or (classify(store, case_id, cues, api_key=model_key, model_uri=model_uri, daily=daily_limit, total=total_limit)
+                                    if cues else 'unknown')
         document_url = None
         with store.connect(write=True) as db:
             row = get_case(db, case_id)
@@ -357,7 +367,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     @app.get(PREFIX + '/manager/agent/status')
     def agent_status(reader: Store = Depends(cabinet_reader)):
-        if reader is jury_store:
+        if reader is not store:
             return {'state': 'on', 'since': ''}
         today_iso = datetime.now(timezone(timedelta(hours=3))).date().isoformat()
         with reader.connect() as db:
@@ -490,12 +500,12 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             'budget_exceeded': cost >= total_limit or today_cost >= daily_limit,
             'server_rub': 370,
             'model_configured': bool(model_key and model_uri),
-            'model_name': 'Alice AI LLM Flash',
+            'model_name': 'Qwen3.6 35B' if model_uri.rstrip('/').endswith('/' + QWEN_MODEL) else 'Alice AI LLM Flash',
             'outages': outages,
             'reasons': reasons,
             'catalog': catalog_info,
             'year': now_msk.year, 'month': now_msk.month, 'day': now_msk.day, 'days_in_month': days_in_month,
-            'sample': reader is jury_store,
+            'sample': reader is not store,
         }
 
     @app.get(PREFIX + '/manager/cases')
@@ -674,6 +684,37 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             answers = all_answers(db)
         return {'rules': [dict(row) for row in rows], 'answers': answers,
                 'agent_rules': AGENT_RULES, 'articles': BUILT_IN_ARTICLES}
+
+    @app.post(PREFIX + '/manager/jury/knowledge')
+    def remember_jury_answer(payload: KnowledgeEntry, demo: Store = Depends(jury_practice)):
+        question, answer = (payload.question or '').strip(), (payload.answer or '').strip()
+        if not payload.confirmed or not question or not answer:
+            raise HTTPException(422, 'Provide a question and answer, and confirm saving.')
+        with demo.connect(write=True) as db:
+            case_id = uuid4().hex
+            db.execute("INSERT INTO cases(id,client_hash,offer,state) VALUES(?,?,?,'approved')", (case_id, case_id, '{}'))
+            append_event(db, case_id, 'opened', 'Учебный диалог для жюри')
+            save_chat_message(db, case_id, 'client', question)
+            save_chat_message(db, case_id, 'manager', answer)
+            append_event(db, case_id, 'manager_decision', 'approved')
+            return remember_answer(db, case_id, question, answer)
+
+    @app.post(PREFIX + '/manager/jury/knowledge/ask')
+    def ask_jury_agent(payload: JuryQuestion, demo: Store = Depends(jury_practice)):
+        question = payload.text.strip()
+        if not question:
+            raise HTTPException(422, 'Provide a question.')
+        with demo.connect(write=True) as db:
+            case_id = uuid4().hex
+            db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)', (case_id, case_id, '{}'))
+            append_event(db, case_id, 'opened', 'Учебный диалог для жюри')
+            save_chat_message(db, case_id, 'client', question)
+            state = {}
+            reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path, text=question)
+            save_chat_state(db, case_id, state)
+            save_chat_message(db, case_id, 'agent', reply, buttons=buttons(choices))
+            remembered = db.execute("SELECT 1 FROM journal WHERE case_id=? AND event='knowledge_answer'", (case_id,)).fetchone()
+            return {'case_id': case_id, 'reply': reply, 'remembered': bool(remembered)}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/journal')
     def journal(case_id: str, reader: Store = Depends(cabinet_reader)):

@@ -42,7 +42,10 @@ def test_after_purchase_and_help_answers(chat, text, must, pending):
     r = chat.say(text)
     assert must in r['reply'], r['reply']
     assert '₽' not in r['reply'], r['reply']       # не уходим в продажу товара
-    assert (chat.state == 'pending') is pending, chat.state
+    assert chat.state == 'open'
+    if pending:
+        chat.say('Проверил, не помогло')
+        assert chat.state == 'pending'
     assert r['reply'].count('?') <= 1
 
 
@@ -164,7 +167,9 @@ def test_quote_button_and_split_requisites_finish_multi_quote(chat):
 @pytest.mark.parametrize('text', ['Купил КриптоПро CSP, не активируется ключ', 'Заказ оплатил вчера. Лицензия до сих пор не пришла'])
 def test_after_purchase_beats_sales_flows(chat, text):
     r = chat.say(text)
-    assert chat.state == 'pending' and '₽' not in r['reply'], r['reply']
+    assert chat.state == 'open' and '₽' not in r['reply'], r['reply']
+    chat.say('Проверил, не помогло')
+    assert chat.state == 'pending'
 
 
 def test_return_question_before_purchase_keeps_sale(chat):
@@ -236,6 +241,8 @@ def test_discount_after_multi_item_keeps_quote(client, monkeypatch):
 
 def test_order_number_after_bot_asked_is_accepted(chat):
     chat.say('Ключ не приходит после оплаты')
+    assert chat.state == 'open'
+    chat.say('В кабинете пусто, в спаме нет')
     assert chat.state == 'pending'
     r = chat.say('номер заказа 998877, ошибка 0x80070005')
     assert 'добавил к обращению' in r['reply'] and '₽' not in r['reply'], r['reply']
@@ -243,7 +250,7 @@ def test_order_number_after_bot_asked_is_accepted(chat):
 
 def test_mixed_activation_and_purchase_mentions_purchase(chat):
     r = chat.say('купили Kaspersky, ключ не подходит, и ещё нужен Office на 5 мест')
-    assert chat.state == 'pending' and 'Покупку' in r['reply'], r['reply']
+    assert chat.state == 'open' and 'Покупку' in r['reply'], r['reply']
 
 
 @pytest.mark.parametrize('text', ['ключ активации касперского не подходит помогите', 'мы купили вчера офис и не можем его активировать',
@@ -251,7 +258,9 @@ def test_mixed_activation_and_purchase_mentions_purchase(chat):
                                   'оплатил но ключа нет', 'заказ не приходит', 'верните деньги за Office'])
 def test_after_purchase_variants_go_to_manager(chat, text):
     r = chat.say(text)
-    assert chat.state == 'pending' and '₽' not in r['reply'], (text, r['reply'])
+    assert chat.state == 'open' and '₽' not in r['reply'], (text, r['reply'])
+    chat.say('Проверил, не помогло')
+    assert chat.state == 'pending'
 
 
 @pytest.mark.parametrize('text,must', [('можно оплатить картой?', 'карт'), ('можно ли оплатить частями', 'Отсрочки нет'),

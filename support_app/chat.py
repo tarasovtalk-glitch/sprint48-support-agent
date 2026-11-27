@@ -22,6 +22,11 @@ CRYPTO_OTHER = re.compile(r'\btsp\b|\bocsp\b|\bdss\b|\bjcp\b|\bуц\b|ipsec|кр
 NEEDS_QUERY = re.compile(r'защит.*(?:почт|файл)|(?:почт|файл).*защит')
 REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр')
 EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|тендер|госзакупк')
+TENDER = re.compile(r'\b(?:44|223)\s*[-‐‑–—]?\s*фз\b|тендер|госзакупк|\bкотировк|проект\w*\s+(?:контракт|договор)')
+DEFERRED_PAYMENT = re.compile(r'оплат\w*.{0,40}через\s+\d+\s+(?:дн|месяц)|отсроч\w*\s+на\s+\d+\s+(?:дн|месяц)')
+SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+ещ[её]|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
+KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
+ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
@@ -77,6 +82,8 @@ INTENT_CUES = {
 
 def intent_cues(text: str) -> str:
     query = normalize(text)
+    if TENDER.search(query) or DEFERRED_PAYMENT.search(query):
+        return ''
     if CRYPTO_NAME.search(query) or MDAEMON_NAME.search(query) or re.search(r'защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
         return ''
     tokens = [w for w in PRODUCT_WORDS.findall(query) if w in INTENT_CUES]
@@ -86,6 +93,8 @@ def intent_cues(text: str) -> str:
 def tool_request(text: str, action: str | None, value: str, state: dict):
     """Return only scenario facts suitable for the model, never the customer's raw input."""
     query = normalize(text)
+    if TENDER.search(query) or DEFERRED_PAYMENT.search(query) or (state.get('post_purchase') and is_closing(text)):
+        return None
     if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query) and not state.get('smolensk_academic'):
         return ('Клиент уточняет условия для школы по ранее названной редакции. Подтверждённой цены для школы нет.',
                 ('contact_manager',))
@@ -401,6 +410,8 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
         lines += ['', f'{topic}: {offer["name"]}', f'{price}{total}{registry_text}']
         if offer.get('url'):
             lines.append(f'Карточка: {offer["url"]}')
+        if note := (offer.get('parameters') or {}).get('Условия поставки'):
+            lines.append(note)
         if units and offer['available'] and offer['price_kopecks']:
             quote_items.append({'id': offer['id'], 'quantity': state['quantity'], 'units': units})
     if state['flow'] == 'needs' and len(quote_items) == len(shown):
@@ -444,6 +455,13 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     state['turn_no'] = state.get('turn_no', 0) + 1
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
+    if TENDER.search(query):
+        return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
+    if DEFERRED_PAYMENT.search(query):
+        return 'По оферте действует предоплата. Индивидуальные условия может согласовать менеджер. ' + enter_queue(db, row, state, 'payment_question'), []
+    if state.get('post_purchase') and is_closing(text):
+        return ('Менеджер ответит здесь, когда проверит обращение.' if row['state'] == 'pending'
+                else 'Хорошо. Если понадобится помощь по заказу, напишите.'), []
     count_query = digits(query)
     correction = CORRECTION.search(count_query)
     count = correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
@@ -475,7 +493,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         return 'Для школы цену нужно уточнить по условиям образовательной поставки. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if tool == 'contact_manager':
         append_event(db, row['id'], 'model_tool_executed', tool)
-        reason = 'customer_request' if action == 'handoff' or EXPLICIT_HANDOFF.search(query) else 'model_routing'
+        reason = state.get('post_purchase_reason', 'customer_request') if action == 'handoff' or EXPLICIT_HANDOFF.search(query) else 'model_routing'
         return enter_queue(db, row, state, reason), []
     if action == 'handoff' or re.search(r'(?:позови|подключи|соедини)\w*\s+(?:с\s+)?(?:оператор|менеджер)', query):
         return enter_queue(db, row, state, 'customer_request'), []
@@ -489,22 +507,63 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         # бот сам попросил детали по заказу — принимаем их в обращение, а не ищем товар по случайным словам
         append_event(db, row['id'], 'customer_details', 'order')
         return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
-    topic = support_topic(query) if text and not action and not state.get('awaiting_customer') else None
+    topic = support_topic(query) if text and not action and not QUOTE_REQUISITES.search(text) else None
     if topic:   # «купил КриптоПро, не активируется ключ» — вопрос по заказу, а не новая продажа
         answer, reason = topic
+        already_helped = state.get('post_purchase')
         state['post_purchase'] = True
+        if reason:
+            state['post_purchase_reason'] = reason
         if EXTRA_PURCHASE.search(query):   # «…и ещё нужен Office на 5 мест» — вторую часть не теряем
             answer += 'Покупку из вашего сообщения посчитаю отдельно — напишите её следующим сообщением. '
-        return (answer + enter_queue(db, row, state, reason), []) if reason else (answer, JOIN_MANAGER)
+        if (already_helped and SUPPORT_TRIED.search(query)) or re.search(r'спам\w*.{0,25}проверен', query):
+            return answer + ' ' + enter_queue(db, row, state, state.get('post_purchase_reason', 'order_question')), []
+        return answer, JOIN_MANAGER
     if (state.get('post_purchase') and text and not action and not is_closing(text)
             and not EXTRA_PURCHASE.search(query) and not QUOTE_REQUISITES.search(text)):
         if row['state'] == 'pending':
             append_event(db, row['id'], 'customer_details', 'order')
             return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
-        return 'Понял, передаю ваш вопрос по заказу менеджеру — он проверит и ответит в этом чате. ' + enter_queue(db, row, state, 'order_question'), []
+        reason = state.get('post_purchase_reason', 'order_question')
+        return 'Менеджер проверит ваш заказ. ' + enter_queue(db, row, state, reason), []
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if KASPERSKY_CENTER.search(query) and (state.get('kaspersky_center') or 'kaspersky' in query or 'касперск' in query or 'kes' in query):
+        state['kaspersky_center'] = True
+        return ('Базовая консоль Kaspersky Security Center доступна для управления защитой организации. '
+                'Для дополнительных возможностей может потребоваться коммерческая лицензия. '
+                'Сравнение режимов у производителя: https://support.kaspersky.com/ksc/14/ru-RU/65277.htm'), JOIN_MANAGER
+    if ANYDESK_NAME.search(query):
+        state['anydesk_requested'] = True
+        if re.search(r'\bдо\s+\d+\s+компьютер', digits(query)) and not re.search(r'одновременн', query):
+            return 'Для AnyDesk важно число одновременных подключений. Сколько сеансов требуется одновременно?', []
+    if state.get('anydesk_requested') and re.search(r'\b1\s+(?:одновременн\w*\s+)?подключени', digits(query)):
+        offer = lookup(catalog, '402266')
+        if offer and offer['available'] and offer['price_kopecks']:
+            state.update(offer_id=offer['id'], quantity=1, awaiting_customer=True)
+            return (f'{offer["name"]}: {chat_price(offer["price_kopecks"])} по каталогу за одну лицензию. '
+                    f'Карточка: {offer["url"]}. {QUOTE_CUSTOMER_PROMPT}'), [('Подготовить КП', 'quote', '')]
+    if re.fullmatch(r'(?:рассмотрим\s+)?(?:российск|отечественн)\w*\s+сервер\w*[.!? ]*', query):
+        return 'Нужна российская серверная операционная система или серверное оборудование?', []
+    if re.search(r'\b(?:касперск\w*|kaspersky)\b', query) and re.search(r'\bstandard\b', query) and not re.search(r'бизнес|endpoint|организац', query):
+        state['kaspersky_standard'] = True
+        if not state.get('quantity'):
+            return 'Kaspersky Standard нужен как новая лицензия или продление и на сколько устройств?', []
+    if state.get('kaspersky_standard') and state.get('quantity') == 5 and re.search(r'на\s+(?:1\s+)?год', query):
+        offer = lookup(catalog, '416859')
+        if offer and offer['available'] and offer['price_kopecks']:
+            state.update(offer_id=offer['id'], g_family=offer['family'], awaiting_customer=True)
+            return (f'{offer["name"]} — {chat_price(offer["price_kopecks"])} за пакет на 5 устройств. '
+                    f'Карточка: {offer["url"]}. {QUOTE_CUSTOMER_PROMPT}'), [('Подготовить КП', 'quote', '')]
+    if re.search(r'кас[пп]ерск|kaspersky', query) and re.search(r'фст[эе]к', query):
+        state['kaspersky_certified'] = True
+    if state.get('kaspersky_certified') and (re.search(r'фст[эе]к', query) or state.get('quantity') == 1):
+        return ('Для сертифицированной ФСТЭК поставки нужна отдельная позиция. '
+                'Подтверждённую цену на один компьютер по каталогу не нашёл. На какой срок нужна лицензия?'), JOIN_MANAGER
+    if 'дистрибутив' in query and ('криптоарм' in query or 'криптоарм' in normalize(state.get('g_text', ''))):
+        return ('Установочный дистрибутив КриптоАРМ 5 можно скачать у разработчика: https://cryptoarm.ru/cryptoarm-5/. '
+                'Лицензия активирует выбранную редакцию. Подтверждение состава конкретной поставки доступно в карточке товара.'), JOIN_MANAGER
     if state.get('flow') == 'cryptopro' and re.search(r'обновлен\w*', query) and re.search(r'верси|платн', query):
         return ('Оплата обновления зависит от версии и условий вашей лицензии. Стоимость перехода на названную версию '
                 'уточнит менеджер. У производителя есть отдельные лицензии на обновление: https://cryptopro.ru/faq/how-to-buy'), JOIN_MANAGER
@@ -539,8 +598,6 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['offer_id'] = offers[0]
             remember_quote_customer(state, text)
             return queue_quote(db, row, state, catalog)
-    if re.search(r'44\s*-?\s*фз|223\s*-?\s*фз|тендер|госзакупк|котировк|проект\w*\s+(?:контракт|договор)', query):
-        return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
     if re.search(r'оператор', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
