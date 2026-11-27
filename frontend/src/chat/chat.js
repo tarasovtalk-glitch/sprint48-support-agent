@@ -203,7 +203,7 @@
 
   function setHead(name, role) {
     nameEl.textContent = name; roleEl.textContent = role; roleEl.hidden = !role;
-    var av = root.querySelector('.slc-av--head');
+    var av = root.querySelector('.slc-av--head, .slc-head__avatar');
     if (av) { av.innerHTML = name === MANAGER.name ? I.person : I.sofl; }
   }
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -550,7 +550,8 @@
         if (m.from === 'client') { if (m.text && all) me(m.text); return; }
         if (m.from === 'system') { if (m.text) sys(m.text); return; }
         var av = m.from === 'manager' ? I.person : I.sofl;
-        if (m.from === 'manager' && m.author && nameEl.textContent !== m.author) setHead(m.author, MANAGER.role);
+        // ответ менеджера подписан один раз: в шапке окна его имя, в самом сообщении приставок нет
+        if (m.from === 'manager' && nameEl.textContent !== (m.author || MANAGER.name)) setHead(m.author || MANAGER.name, MANAGER.role);
         if (t === 'close') { closed = true; stop(); if (m.text) bot(m.text, av, false); sys('Диалог завершён'); setTimeout(surveyOpen, 900); return; }
         if (m.text) bot(m.text, av, false);
         if (t === 'file' && m.file) fileMsg({ name: m.file.name, size: m.file.size_kb, url: m.file.url }, av);

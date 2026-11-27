@@ -37,6 +37,13 @@ html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",R
 .cta:hover{background:var(--brand-hover)}
 .cta:active{background:var(--brand-pressed);transform:scale(.98)}
 .cta:focus-visible{outline:0;box-shadow:0 0 0 2px #fff,0 0 0 4px var(--brand)}
+.cta[hidden]{display:none}
+.screen__actions{display:flex;flex-wrap:wrap;gap:12px}
+/* вторая кнопка тише главной: белая с обводкой */
+.cta--quiet{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px #d2d3d9}
+.cta--quiet:hover{background:#f5f5f7}
+.cta--quiet:active{background:#ececf0}
+.cta--quiet:focus-visible{box-shadow:inset 0 0 0 1px #d2d3d9,0 0 0 2px #fff,0 0 0 4px var(--ink)}
 /* текст появляется один раз при загрузке: снизу на 8 px и из прозрачного, 320 мс */
 .screen__text>*{animation:rise .32s var(--ease) both}
 .screen__text>:nth-child(2){animation-delay:.06s}
@@ -72,11 +79,21 @@ html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",R
       <div class="role role--agent"><span class="role__label">Агент сам</span><p class="role__text">Подбирает лицензии, считает сумму и&nbsp;готовит КП</p></div>
       <div class="role role--manager"><span class="role__label">Менеджер</span><p class="role__text">Скидка больше <b>5%</b>, отсрочка, проверка&nbsp;КП. Ответ в&nbsp;этом&nbsp;же чате</p></div>
     </div>
-    <a class="cta" href="cabinet/">Кабинет менеджера</a>
+    <div class="screen__actions">
+      <a class="cta" href="cabinet/">Кабинет менеджера</a>
+      <a class="cta cta--quiet" href="site/" data-site hidden>Глазами клиента</a>
+    </div>
   </div>
 </main>
 <script src="config.js"></script>
 <script src="api.js"></script>
 <script src="chat/chat.js"></script>
+<script>
+// Копия главной страницы магазина с этим же чатом лежит только на локальном стенде (папка site/), в репозитории её нет:
+// кнопка появляется, только если копия на месте, иначе она вела бы в пустоту
+fetch('site/chat/site.js', { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+  if (r.ok && /javascript/.test(r.headers.get('content-type') || '')) document.querySelector('[data-site]').hidden = false;
+}).catch(function () {});
+</script>
 </body>
 </html>
