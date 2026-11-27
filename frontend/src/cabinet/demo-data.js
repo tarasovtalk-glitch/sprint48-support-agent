@@ -299,7 +299,7 @@ window.CABINET_DEMO = (function () {
   var settings = {
     limit_rub: 1000, warn_rub: 800, answer_min: 2, days: 'Пн–пт', from: '9:00', to: '18:00',
     notify: true, channel: 'telegram',
-    channels: [{ id: 'telegram', name: 'Telegram', note: 'бот магазина' }, { id: 'max', name: 'MAX', note: 'нужна подтверждённая организация', off: true }],
+    channels: [{ id: 'telegram', name: 'Telegram', note: 'бот магазина' }, { id: 'max', name: 'MAX', note: 'нужна проверка компании', off: true }],
     model: 'alice',
     models: [
       { id: 'alice', name: 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' },
