@@ -109,7 +109,7 @@
   var ui = {
     tab: 'today', sub: 'work', sel: null, lastTab: null, lastSel: null,
     kpClosed: {}, kpEdit: {}, discount: {}, talkAll: {}, drafts: {}, help: {}, typing: {}, busy: {},
-    jDay: midnight(new Date()), jFilter: null, jQuery: '', jOpen: {}, jSel: null,
+    jDay: midnight(new Date()), jFilter: null, jQuery: '', jOpen: {}, jSel: null, lineOpen: {},
     qQuery: '', qOpen: {},
     kQuery: '', kOpen: {}, kAll: false, benefit: null
   };
@@ -138,7 +138,7 @@
       var fresh = ui.lastTab !== tab + ui.sub;
       ui.lastTab = tab + ui.sub;
       v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
-      renderTop(); restoreDrafts(); ensureTalk();
+      renderTop(); restoreDrafts(); ensureTalk(); foldLong();
     });
   }
 
@@ -369,7 +369,31 @@
     var av = l.who === 'agent' ? BOT : l.who === 'client' ? '<span class="avatar avatar--24" aria-hidden="true">К</span>'
       : '<span class="avatar avatar--24 avatar--staff" aria-hidden="true">' + esc(l.who === 'me' ? 'А' : l.initials || (l.name || 'М').charAt(0)) + '</span>';
     var who = l.who === 'agent' ? 'Агент' : l.who === 'client' ? 'Клиент' : l.who === 'me' ? 'Антон' : l.name || 'Менеджер';
-    return '<div class="line' + (l._new ? ' is-new' : '') + '">' + av + '<p><span class="line__who">' + esc(who) + '</span> ' + t(l.text) + '</p></div>';
+    var key = l.who + ':' + hashOf(l.text);
+    return '<div class="line' + (l._new ? ' is-new' : '') + '">' + av + '<div class="line__col"><p data-fold="' + esc(key) + '"' + (ui.lineOpen[key] ? '' : ' class="is-fold"') + '><span class="line__who">' + esc(who) + '</span> ' + talkText(l.text) + '</p></div></div>';
+  }
+  /* Длинное сообщение любого участника: переносы строк как в чате, ссылка видна словом, а не адресом на три строки,
+     после шести строк сообщение свёрнуто, «Показать полностью» раскрывает его на месте */
+  function hashOf(s) { var h = 0; s = String(s || ''); for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h.toString(36); }
+  var URL_SRC = 'https?:\\/\\/[^\\s<]*[^\\s<.,;:!?)»]';
+  function linkWord(u) {
+    var host = ((u.match(/^https?:\/\/([^\/?#]+)/) || [])[1] || u).replace(/^www\./, '');
+    return /(^|\.)softline\.ru$/.test(host) ? 'страница товара' : /reestr\.digital\.gov\.ru$/.test(host) ? 'запись в реестре' : host;
+  }
+  function aTag(u, text) { return '<a href="' + u + '" target="_blank" rel="noopener">' + text + '</a>'; }
+  function talkText(s) {
+    return t(String(s || '').replace(/\n{3,}/g, '\n\n'))
+      .replace(new RegExp('Карточка:\\s*(' + URL_SRC + ')', 'g'), function (_, u) { return aTag(u, 'Карточка товара'); })
+      .replace(new RegExp('(реестр\\s+№\\s*\\d+)\\s+(' + URL_SRC + ')', 'g'), function (_, r, u) { return aTag(u, r); })
+      .replace(new RegExp('(^|[\\s(«])(' + URL_SRC + ')', 'g'), function (_, pre, u) { return pre + aTag(u, linkWord(u)); })
+      .replace(/\n/g, '<br>');
+  }
+  function foldLong() {
+    $$('.line p[data-fold]').forEach(function (p) {
+      var key = p.getAttribute('data-fold'), open = !!ui.lineOpen[key];
+      if (!open && p.scrollHeight <= p.clientHeight + 1) { p.classList.remove('is-fold'); return; }
+      p.insertAdjacentHTML('afterend', '<button class="line__more" type="button" data-act="lfold" data-key="' + esc(key) + '" aria-expanded="' + open + '">' + (open ? 'Свернуть' : 'Показать полностью') + '</button>');
+    });
   }
   // переписка и шаги с сервера приходят отдельным запросом, когда карточку открыли
   function ensureTalk() {
@@ -845,6 +869,7 @@
       case 'return': return giveBack(c, b);
       case 'say': return say(c);
       case 'more': ui.talkAll[id] = !ui.talkAll[id]; render(); return;
+      case 'lfold': ui.lineOpen[b.getAttribute('data-key')] = !ui.lineOpen[b.getAttribute('data-key')]; render(); return;
       case 'goto-today': ui.sel = id; location.hash = '#today'; return;
 
       /* состояние агента */

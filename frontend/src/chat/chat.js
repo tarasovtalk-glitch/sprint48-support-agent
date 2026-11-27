@@ -140,8 +140,18 @@
   // Бот Webim шлёт только простой текст, кнопки, файлы и перевод на оператора.
   // Карточки и **полужирный** остаются для шага 2 (свой виджет поверх Webim), их видно только по адресу с #cards
   var CARDS = NEW;
-  // ссылки из ответа сервера (карточка товара, справка) открываются в новой вкладке
-  function links(h) { return h.replace(/https?:\/\/[^\s<]*[^\s<.,;:!?)»]/g, function (u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>'; }); }
+  // ссылки из ответа сервера (карточка товара, реестр, справка) открываются в новой вкладке и видны словом, а не адресом на три строки
+  var URL_SRC = 'https?:\\/\\/[^\\s<]*[^\\s<.,;:!?)»]';
+  function linkWord(u) {
+    var host = ((u.match(/^https?:\/\/([^\/?#]+)/) || [])[1] || u).replace(/^www\./, '');
+    return /(^|\.)softline\.ru$/.test(host) ? 'страница товара' : /reestr\.digital\.gov\.ru$/.test(host) ? 'запись в реестре' : host;
+  }
+  function aTag(u, text) { return '<a href="' + u + '" target="_blank" rel="noopener">' + text + '</a>'; }
+  function links(h) {
+    return h.replace(new RegExp('Карточка:\\s*(' + URL_SRC + ')', 'g'), function (_, u) { return aTag(u, 'Карточка товара'); })
+      .replace(new RegExp('(реестр\\s+№\\s*\\d+)\\s+(' + URL_SRC + ')', 'g'), function (_, r, u) { return aTag(u, r); })
+      .replace(new RegExp('(^|[\\s(«])(' + URL_SRC + ')', 'g'), function (_, pre, u) { return pre + aTag(u, linkWord(u)); });
+  }
   function rich(s) { return links(CARDS ? esc(ty(s)).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') : esc(ty(s.replace(/\*\*/g, '')))); }
   function bot(text, avatar, share) { return bubbleMsg('<div class="slc-bubble">' + rich(text) + '</div>', avatar, share); }
   // карточка с главными цифрами внутри ответа агента (как message-card в Фигме)

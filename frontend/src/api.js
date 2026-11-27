@@ -298,7 +298,8 @@
     it.title = q || REASON[v.reason] ? c.queue_title : first ? '«' + first + '»' : 'Разговор с агентом';
     if (v.state === 'pending') { it.case_id = v.id; it.status = { tone: 'neutral', text: 'Ждёт ответа', open: true }; return it; }
     closeCase(c, v);
-    if (!q && !REASON[v.reason]) c.title = it.title;
+    // в карточке слова клиента стоят под заголовком, поэтому заголовок их не повторяет: агент вёл разговор сам
+    if (!q && !REASON[v.reason]) c.title = 'Разговор с агентом';
     it.detail = c;
     it.status = { tone: c.done_tone, text: c.done_label.replace(/ в \d{1,2}:\d{2}$/, '') };
     return it;

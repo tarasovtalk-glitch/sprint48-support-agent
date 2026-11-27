@@ -233,6 +233,13 @@ b,strong{font-weight:500}
 .line{display:flex;gap:10px;align-items:flex-start}
 .line p{flex:1;min-width:0;padding-top:2px;overflow-wrap:anywhere}
 .line__who{color:var(--muted)}
+.line__col{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.line__col p{align-self:stretch}
+.line p.is-fold{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:8;line-clamp:8;overflow:hidden}
+.line p a{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px}
+.line__more{color:var(--accent-ink);font-weight:500;border-radius:4px;transition:color var(--t-state) var(--ease)}
+.line__more:hover{color:var(--accent-hover)}
+.line__more:focus-visible{box-shadow:var(--ring)}
 .line.is-new{animation:rise var(--t-view) var(--ease) both}
 .line--typing p{color:var(--muted)}
 .typing{display:inline-flex;gap:3px;margin-left:4px;vertical-align:middle}
