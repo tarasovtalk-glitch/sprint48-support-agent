@@ -290,6 +290,10 @@ textarea.field{resize:vertical;min-height:64px;padding:10px 14px}
 .ghead:hover{color:var(--accent-ink)}
 .ghead:focus-visible{box-shadow:var(--ring)}
 .ghead--muted{color:var(--muted)}
+/* заголовок группы держится сверху, пока листаешь её пункты, следующий заголовок его сменяет:
+   в журнале внутри списка, в знаниях у верха окна */
+.groups .ghead{position:sticky;top:0;z-index:1;background:#fff;margin:0 -12px;width:calc(100% + 24px);padding:8px 12px;border-radius:0}
+.groups .ghead:focus-visible{border-radius:8px}
 .glist{display:flex;flex-direction:column;gap:4px;animation:fade var(--t-pop) var(--ease) both}
 .lrow{display:flex;flex-direction:column;gap:4px;width:100%;margin:0 -12px;width:calc(100% + 24px);padding:8px 12px;border-radius:12px;transition:background-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease)}
 .lrow:hover{background:var(--panel)}
