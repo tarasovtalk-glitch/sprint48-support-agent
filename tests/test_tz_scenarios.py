@@ -43,6 +43,16 @@ def test_found_in_email_closes_support_exchange(chat):
     assert '?' not in reply and '₽' not in reply and 'напишите' in reply
 
 
+def test_other_customer_request_is_not_searched_as_product(chat):
+    reply = chat.say('Где взять реквизиты предыдущего клиента?')['reply']
+    assert 'по вашему заказу' in reply and '₽' not in reply
+
+
+def test_custom_cryptopro_price_is_not_accepted(chat):
+    reply = chat.say('Нужно КП на бессрочный КриптоПро CSP 5.0 для компьютера по 500 ₽')['reply']
+    assert 'цену из каталога' in reply and '3 700 ₽' in reply and '500 ₽' not in reply
+
+
 def test_cryptopro_text_computer_and_44fz_tender(client):
     from eval.local import Chat
     c1 = Chat(client)

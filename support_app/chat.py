@@ -29,6 +29,12 @@ INVOICE_REQUEST = re.compile(r'\b(?:выстав\w*|пришл\w*|сформир
 KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
 ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
 TOTAL_QUANTITY = re.compile(r'\b(?:всего|итого|суммарно)\s*:?\s*([1-9]\d{0,3})(?=\s*(?:[?!.),]*$|шт|мест|компьютер|устройств))')
+PRIVATE_ORDER_REQUEST = re.compile(
+    r'\b(?:инн|кпп|почт\w*|телефон\w*|реквизит\w*|кп|сч[её]т)\b.{0,48}'
+    r'(?:(?:чуж\w*|прошл\w*|предыдущ\w*|друг\w*)\s+(?:клиент|покупател|пользовател|заказ)|клиент\w*\s+до\s+меня)'
+    r'|\bчуж\w*\s+(?:кп|сч[её]т|реквизит\w*|заказ\w*)\b'
+)
+CUSTOM_UNIT_PRICE = re.compile(r'\b(?:по|за)\s+\d[\d \u00a0]*(?:[.,]\d{1,2})?\s*(?:₽|руб\w*|р\.)')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
@@ -84,7 +90,7 @@ INTENT_CUES = {
 
 def intent_cues(text: str) -> str:
     query = normalize(text)
-    if TENDER.search(query) or DEFERRED_PAYMENT.search(query):
+    if TENDER.search(query) or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query):
         return ''
     if CRYPTO_NAME.search(query) or MDAEMON_NAME.search(query) or re.search(r'защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
         return ''
@@ -95,7 +101,8 @@ def intent_cues(text: str) -> str:
 def tool_request(text: str, action: str | None, value: str, state: dict):
     """Return only scenario facts suitable for the model, never the customer's raw input."""
     query = normalize(text)
-    if TENDER.search(query) or DEFERRED_PAYMENT.search(query) or (state.get('post_purchase') and is_closing(text)):
+    if (TENDER.search(query) or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query)
+            or (state.get('post_purchase') and is_closing(text))):
         return None
     if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query) and not state.get('smolensk_academic'):
         return ('Клиент уточняет условия для школы по ранее названной редакции. Подтверждённой цены для школы нет.',
@@ -457,6 +464,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     state['turn_no'] = state.get('turn_no', 0) + 1
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
+    if PRIVATE_ORDER_REQUEST.search(query):
+        return 'Документы и реквизиты по вашему заказу доступны в личном кабинете. С проверкой своего заказа поможет оператор.', JOIN_MANAGER
     if TENDER.search(query):
         return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
     if DEFERRED_PAYMENT.search(query):
@@ -729,6 +738,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             return enter_queue(db, row, state, 'catalog_unavailable'), []
         state['offer_id'] = product['id']
         line = f'{product["name"]} — {chat_price(product["price_kopecks"])}. {product["url"]}'
+        if CUSTOM_UNIT_PRICE.search(query):
+            line = 'В КП использую цену из каталога. Индивидуальную цену согласует менеджер.\n' + line
         if state.get('quantity'):
             state['awaiting_customer'] = True
             if re.search(r'\bинн\b', query):  # заказ и реквизиты в одной реплике — сразу КП
