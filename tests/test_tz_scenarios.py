@@ -1,6 +1,8 @@
 """Сценарии ТЗ, которые уже работают и показаны в видео. Любая правка обязана оставить их зелёными."""
 from uuid import uuid4
 
+import pytest
+
 from conftest import REQ
 from eval.local import MANAGER_KEY
 
@@ -110,6 +112,25 @@ def test_mdaemon_standard_honest_and_quote(chat):
     assert 'MDaemon Standard:' not in r['reply']
     r = chat.say(REQ)
     assert 'Черновик КП' in r['reply'] and chat.state == 'pending'
+
+
+@pytest.mark.parametrize(('first', 'followup', 'offer_id', 'total'), [
+    ('хочу приобрести office 2021', 'для дома и бизнеса, на 5 компьютеров, бессрочный', '473582', '183 285 ₽'),
+    ('сколько стоит windows 10 pro?', 'а 11 pro подойдёт, нужно 3 штуки', '380385', '91 524 ₽'),
+])
+def test_unpriced_version_does_not_prevent_quote_for_catalog_alternative(chat, first, followup, offer_id, total):
+    assert 'подтверждённой цены' in chat.say(first)['reply'].lower()
+    assert chat.state == 'open'
+    priced = chat.say(followup)['reply']
+    assert f'-{offer_id}/' in priced and total in priced
+    quote = chat.say(REQ)['reply']
+    assert 'Черновик КП' in quote and total in quote and chat.state == 'pending'
+
+
+def test_mdaemon_renewal_uses_matching_seats_and_term(chat):
+    reply = chat.say('нужен messaging server, 10 пользователей, продление подписки на год')['reply']
+    assert '-19586/' in reply and 'продление подписки' in reply
+    assert 'новая лицензия' not in reply.lower()
 
 
 def test_needs_mail_and_files_selection(chat):

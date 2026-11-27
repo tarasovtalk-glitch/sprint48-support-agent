@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .dialog import (
-    CORRECTION, catalog_turn, digits, is_closing, multi_quote, quantity, support_topic, units_for,
+    CORRECTION, RENEWAL, catalog_turn, digits, is_closing, multi_quote, price_line, quantity, support_topic, term, units_for,
 )
 from .catalog import discounted, find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
@@ -34,12 +34,38 @@ PRIVATE_ORDER_REQUEST = re.compile(
     r'(?:(?:чуж\w*|прошл\w*|предыдущ\w*|друг\w*)\s+(?:клиент|покупател|пользовател|заказ)|клиент\w*\s+до\s+меня)'
     r'|\bчуж\w*\s+(?:кп|сч[её]т|реквизит\w*|заказ\w*)\b'
 )
+# служебные настройки агента и данные других клиентов — короткий отказ без поиска по каталогу и без передачи менеджеру
+SERVICE_PROBE = re.compile(
+    r'system\s*prompt|developer\s+mode|tool\s+list|(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions'
+    r'|системн\w*\s+(?:промпт|подсказк|инструкц|настройк)|режим\w*\s+разработчик'
+    r'|(?:покажи|выведи|распечатай|напиши|раскрой)\w*\s+(?:сво\w+\s+)?(?:промпт|инструкци|настройк|правил\w*\s+работ|список\s+инструмент)'
+)
+OTHER_CLIENT_DATA = re.compile(
+    r'\b(?:инн|кпп|почт\w*|e-?mail|телефон\w*|реквизит\w*|адрес\w*|данн\w*|контакт\w*)\b.{0,60}'
+    r'(?:клиент\w*|покупател\w*|пользовател\w*)\W{0,3}\s*(?:который|которая|которые|что)?\s*(?:писал\w*|обращал\w*|был\w*)?\s*'
+    r'(?:\w+\s+){0,2}(?:перед\s+мной|до\s+меня|раньше\s+меня)'
+)
+SERVICE_REFUSAL = 'Не могу показать служебные настройки или данные других клиентов. Помогу подобрать лицензию или с вопросом по заказу.'
+INSTALLMENT = re.compile(r'рассрочк')
+NO_INSTALLMENT = re.compile(r'без\s+рассрочк|рассрочк\w*\s+не\s+нужн|не\s+нужн\w*\s+рассрочк')
+PUBLIC_CUSTOMER = re.compile(r'\bиогв\b|госучрежд|государственн\w*\s+учрежд|бюджетн\w*\s+учрежд')
+PROCUREMENT = re.compile(r'закупк|закупит|закупа')
+ARCHICAD_NAME = re.compile(r'archicad|арх[иым]кад|арчикад|архикэд')
+SERVER_LINUX = re.compile(r'(?:защит\w*.{0,80}сервер|сервер.{0,80}защит).{0,120}(?:linux|линукс)|(?:linux|линукс).{0,120}(?:защит\w*.{0,80}сервер|сервер.{0,80}защит)')
+NANOCAD_PLATFORM_YEAR = '516375'     # Платформа nanoCAD 26, лицензия на 1 год, локальная
+KES_STANDARD_10_14 = '4982'          # KES для бизнеса Стандартный, 1 год, диапазон 10–14 узлов, цена за узел
 CUSTOM_UNIT_PRICE = re.compile(r'\b(?:по|за)\s+\d[\d \u00a0]*(?:[.,]\d{1,2})?\s*(?:₽|руб\w*|р\.)')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
 WINDOWS_PRO = re.compile(r'\bwindows\s+11\s+pro\b')
+WINDOWS_10_PRO = re.compile(r'\b(?:windows|виндовс)\s+10\s+pro\b')
+WINDOWS_11_FOLLOWUP = re.compile(r'\b11\s+pro\b')
 OFFICE_HOME = re.compile(r'\b(?:дома|для дома|домашн\w*)\b.{0,40}\b(?:office|офис)\b|\b(?:office|офис)\b.{0,40}\bдля дома\b')
+OFFICE_2021 = re.compile(r'\b(?:office|офис)\s+2021\b')
+HOME_AND_BUSINESS = re.compile(r'\bдля\s+дома\s+и\s+бизнес\w*\b')
+KASPERSKY_TOTAL = re.compile(r'\b(?:kaspersky|касперск\w*)\s+(?:total\s+security|тотал\s+секьюрити)\b')
+MDAEMON_MESSAGING = re.compile(r'\bmessaging\s+server\b')
 EDUCATIONAL_PRICE = re.compile(r'школ|учебн|образовательн')
 VIPNET_NAME = re.compile(r'vipnet|випнет')
 CSP_COMPARISON = (
@@ -90,7 +116,9 @@ INTENT_CUES = {
 
 def intent_cues(text: str) -> str:
     query = normalize(text)
-    if TENDER.search(query) or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query):
+    if (TENDER.search(query) or (PUBLIC_CUSTOMER.search(query) and PROCUREMENT.search(query))
+            or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query)
+            or SERVICE_PROBE.search(query) or OTHER_CLIENT_DATA.search(query) or INSTALLMENT.search(query)):
         return ''
     if CRYPTO_NAME.search(query) or MDAEMON_NAME.search(query) or re.search(r'защит.*(?:почт|файл)|закрывающ|отсроч|оператор|купон|скидк', query):
         return ''
@@ -101,7 +129,9 @@ def intent_cues(text: str) -> str:
 def tool_request(text: str, action: str | None, value: str, state: dict):
     """Return only scenario facts suitable for the model, never the customer's raw input."""
     query = normalize(text)
-    if (TENDER.search(query) or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query)
+    if (TENDER.search(query) or (PUBLIC_CUSTOMER.search(query) and PROCUREMENT.search(query))
+            or DEFERRED_PAYMENT.search(query) or PRIVATE_ORDER_REQUEST.search(query)
+            or SERVICE_PROBE.search(query) or OTHER_CLIENT_DATA.search(query) or INSTALLMENT.search(query)
             or (state.get('post_purchase') and is_closing(text))):
         return None
     if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query) and not state.get('smolensk_academic'):
@@ -323,6 +353,21 @@ def queue_quote(db, row, state, catalog: Path):
             f'Сумма по каталогу проверена. {message}'), []
 
 
+def offer_price(state: dict, offer: dict | None, intro: str = ''):
+    if not offer or not offer['available'] or not offer['price_kopecks']:
+        return None
+    qty = state.get('quantity')
+    units = units_for(offer, qty)
+    if units is None:
+        return None
+    state.update(flow=None, g_family=offer['family'], offer_id=offer['id'], offered_ids=[offer['id']])
+    for key in ('price_topic', 'g_missing', 'g_items', 'needs_quote_items'):
+        state.pop(key, None)
+    state['awaiting_customer'] = bool(qty)
+    tail = QUOTE_CUSTOMER_PROMPT if qty else 'На сколько лицензий посчитать?'
+    return f'{intro}{price_line(offer, qty, units=units)}. {tail}', [('Подготовить КП', 'quote', '')]
+
+
 def coupon(state) -> int:
     """Купон, который бот уже предложил в этом диалоге (не больше 5 %): он же попадает в КП."""
     try:
@@ -463,12 +508,32 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         query = normalize(text)
         state.pop('redcheck_follow_up', None)
     state['turn_no'] = state.get('turn_no', 0) + 1
+    linux_request = bool(SERVER_LINUX.search(query))
+    if linux_request:
+        state['linux_server'] = True
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
+    if SERVICE_PROBE.search(query) or OTHER_CLIENT_DATA.search(query):
+        append_event(db, row['id'], 'service_probe_refused', 'chat')
+        return SERVICE_REFUSAL, []
     if PRIVATE_ORDER_REQUEST.search(query):
         return 'Документы и реквизиты по вашему заказу доступны в личном кабинете. С проверкой своего заказа поможет оператор.', JOIN_MANAGER
     if TENDER.search(query):
         return 'Закупку по тендеру или 44/223-ФЗ оформляет менеджер. ' + enter_queue(db, row, state, 'tender'), []
+    if PUBLIC_CUSTOMER.search(query) and PROCUREMENT.search(query):
+        return 'Закупку по тендеру ведёт менеджер. ' + enter_queue(db, row, state, 'tender'), []
+    # ArchiCAD отдельным коротким вопросом (в длинном списке программ работает общий подбор); уточнение цены — без других названий
+    if ((ARCHICAD_NAME.search(query) and len(query) <= 160)
+            or (state.get('archicad') and len(query) <= 80 and not re.search(r'[a-z]', query) and re.search(r'цен|стоит|стоимост|ориентир', query))):
+        if row['state'] == 'pending' and state.get('archicad'):
+            return 'Цену на ArchiCAD назовёт менеджер — запрос уже у него, ответ придёт в этот чат.', []
+        priced = False
+        if catalog.is_file():
+            with closing(read_only(catalog)) as cdb:
+                priced = cdb.execute("SELECT 1 FROM products WHERE lower(name) LIKE '%archicad%' AND available=1 AND price_kopecks>0 LIMIT 1").fetchone()
+        if not priced:
+            state['archicad'] = True
+            return 'Подтверждённой цены на ArchiCAD сейчас нет. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if DEFERRED_PAYMENT.search(query):
         return 'По оферте действует предоплата. Индивидуальные условия может согласовать менеджер. ' + enter_queue(db, row, state, 'payment_question'), []
     if row['state'] == 'pending' and re.search(r'скольк\w*\s+ждать|когда\s+ответ|срок\w*\s+(?:под\s+заказ|поставки)|\bжд[её]м\s+кп\b', query):
@@ -516,6 +581,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if known:  # менеджер уже отвечал на такой вопрос и сохранил общий ответ в базу знаний
         return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
                 + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
+    if INSTALLMENT.search(query) and not NO_INSTALLMENT.search(query):
+        return 'Рассрочку согласует менеджер. ' + enter_queue(db, row, state, 'payment_question'), []
     if (row['state'] == 'pending' and text and state.get('queue_reason') in ('order_question', 'activation_problem', 'payment_question', 'closing_documents')
             and (ORDER_DETAILS.search(query) or state.get('post_purchase') or re.search(r'плат[её]жк|спам|кабинет|браузер|ссылк|чек|квитанц|скрин|приложи|скинут|отправит', query))
             and not is_closing(text) and not EXTRA_PURCHASE.search(query)):
@@ -553,6 +620,48 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if WINDOWS_10_PRO.search(query) and catalog.is_file():
+        with closing(read_only(catalog)) as cat:
+            offers = find_matches(cat, ['windows', '10', 'pro'], None, None, active_only=True, new_purchase_only=True)
+        if not any(WINDOWS_10_PRO.search(normalize(offer['name'])) for offer in offers):
+            state['price_topic'] = 'windows_10_pro'
+            return 'Подтверждённой цены на Windows 10 Pro в каталоге нет. Подойдёт Windows 11 Pro?', []
+    if state.get('price_topic') == 'windows_10_pro' and WINDOWS_11_FOLLOWUP.search(query):
+        reply = offer_price(state, lookup(catalog, '380385'))
+        return reply or ('Цену Windows 11 Pro для этого заказа уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
+    if OFFICE_2021.search(query) and catalog.is_file():
+        with closing(read_only(catalog)) as cat:
+            offers = find_matches(cat, ['office', '2021'], None, None, active_only=True, new_purchase_only=True)
+        if not any(OFFICE_2021.search(normalize(offer['name'])) for offer in offers):
+            state['price_topic'] = 'office_2021'
+            if not HOME_AND_BUSINESS.search(query):
+                return 'В каталоге нет подтверждённой цены на Office 2021. Какая редакция нужна: для дома и бизнеса, домашняя или другая?', []
+    if state.get('price_topic') == 'office_2021' and HOME_AND_BUSINESS.search(query):
+        reply = offer_price(state, lookup(catalog, '473582'), 'Ближайшая доступная редакция — Office для дома и бизнеса 2024. ')
+        return reply or ('Доступную редакцию Office уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
+    if KASPERSKY_TOTAL.search(query) and not re.search(r'для\s+бизнес|организац|enterprise', query):
+        state['price_topic'] = 'kaspersky_total'
+        if 'для дома' not in query:
+            return 'Подбираете защиту для дома или для организации? У них разные лицензии Kaspersky.', []
+    if state.get('price_topic') == 'kaspersky_total' and 'для дома' in query:
+        pack = {3: '416858', 5: '416859'}.get(state.get('quantity'))
+        if pack and term(text) == 12 and re.search(r'нов\w*\s+лиценз', query):
+            reply = offer_price(state, lookup(catalog, pack), 'Для дома могу предложить годовой пакет Kaspersky Standard. ')
+            if reply:
+                return reply
+        return 'Домашнюю редакцию и условия лицензии Kaspersky уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), []
+    if ((MDAEMON_MESSAGING.search(query) or MDAEMON_NAME.search(query) or state.get('flow') == 'mdaemon')
+            and RENEWAL.search(query) and catalog.is_file()):
+        qty, months = state.get('quantity'), term(text) or state.get('term')
+        if qty and months:
+            with closing(read_only(catalog)) as cat:
+                matches = find_matches(cat, ['mdaemon', 'messaging', 'server'], qty, months, active_only=True)
+            expired = 'просроч' in query
+            eligible = (offer for offer in matches if not offer['new_purchase'] and offer['max_users'] == qty
+                        and offer['term_months'] == months and MDAEMON_MESSAGING.search(normalize(offer['name']))
+                        and RENEWAL.search(normalize(offer['name'])) and ('просроч' in normalize(offer['name'])) == expired)
+            reply = offer_price(state, min(eligible, key=lambda offer: offer['price_kopecks'], default=None))
+            return reply or ('Условия продления MDaemon Messaging Server уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
     if re.search(r'\b(?:windows|виндовс)\b.{0,20}(?:для\s+дома|домашн)', query) and not re.search(r'\b(?:pro|server)\b', query):
         offer = lookup(catalog, '380389')
         if offer and offer['available'] and offer['price_kopecks']:
@@ -560,7 +669,39 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             return (f'{offer["name"]} — {chat_price(offer["price_kopecks"])} за одну лицензию. '
                     f'Карточка: {offer["url"]}.'), [('Подготовить КП', 'quote', '')]
     if re.search(r'\b(?:nano\s*cad|нано\s*кад)\b', query) and not re.search(r'спдс|geonics|геоникс|конструкц|платформ', query):
+        state['nanocad_asked'] = True
+        state['nanocad_term'] = term(text)
         return 'У Нанософт несколько продуктов nanoCAD. Нужна базовая платформа или отраслевой модуль, например СПДС?', []
+    if (state.get('nanocad_asked') and not action and count and not state.get('offer_id')
+            and not re.search(r'спдс|geonics|геоникс|конструкц|модул|землеустр|механик|топоплан|\b(?:office|windows|kaspersky|autocad)\b', query)):
+        interval = term(text)
+        if interval is None:
+            interval = state.get('nanocad_term')
+        if interval == 12 and not re.search(r'сетев|linux|линукс', query):
+            reply = offer_price(state, lookup(catalog, NANOCAD_PLATFORM_YEAR), 'Расчёт для базовой локальной платформы nanoCAD. ')
+            if reply:
+                state.pop('nanocad_asked', None)
+                state.pop('nanocad_term', None)
+                return reply
+        return 'Для nanoCAD нужна локальная или сетевая лицензия и на какой срок?', []
+    if (state.get('linux_server') and not action and not state.get('offer_id')
+            and (linux_request or re.search(r'нов\w+\s+лиценз|\bсервер|на\s+(?:1\s+|один\s+)?год', query))):
+        servers = re.search(r'\b([1-9]\d{0,3})\s+сервер', digits(query))
+        if servers:
+            state['linux_server_count'] = int(servers[1])
+        months = term(text)
+        if months is not None:
+            state['linux_server_term'] = months
+        if not state.get('linux_server_count') or state.get('linux_server_term') is None:
+            return 'Подбираю защиту для Linux-сервера. Сколько серверов и на какой срок нужна лицензия?', []
+        offer = lookup(catalog, KES_STANDARD_10_14) if state['linux_server_count'] == 1 and state['linux_server_term'] == 12 else None
+        if offer and offer['available'] and offer['price_kopecks']:
+            state.pop('linux_server', None)
+            return ('В каталоге есть Kaspersky Endpoint Security для бизнеса Стандартный. '
+                    f'Лицензия продаётся от 10 узлов: {chat_price(offer["price_kopecks"])} за узел на 1 год, '
+                    f'минимальный пакет 10 узлов — {chat_price(offer["price_kopecks"] * 10)}. Карточка: {offer["url"]}. '
+                    'Совместимость с вашей системой Linux и поставку на один сервер уточнит менеджер.'), JOIN_MANAGER
+        return 'Подходящую лицензию защиты Linux-сервера уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if re.search(r'как\s+(?:подобрать|выбрать).{0,35}\bpdf\b|подбер\w*.{0,35}для\s+работы\s+с\s+pdf', query):
         return 'Что нужно делать с PDF: редактировать, подписывать или распознавать сканы?', []
     if (state.get('flow') == 'cryptopro' or CRYPTO_NAME.search(query)) and re.search(r'дистрибутив|(?:где|как)\s+скачат', query):
