@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS mail_outbox (
     sent_at INTEGER,
     UNIQUE(case_id, kind)
 );
+CREATE TABLE IF NOT EXISTS knowledge (
+    id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    keys TEXT NOT NULL,
+    source_case TEXT NOT NULL REFERENCES cases(id),
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 

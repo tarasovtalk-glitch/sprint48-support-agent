@@ -121,6 +121,17 @@ def catalog_router(path: Path, demo_key: str, font: Path, require_key) -> APIRou
         if not path.is_file():
             raise HTTPException(503, 'Catalog import is not ready.')
 
+    @router.get('/status')
+    def status():
+        """Свежесть каталога для мониторинга и жюри: дата фида, когда загружен, сколько позиций."""
+        if not path.is_file():
+            raise HTTPException(503, 'Catalog import is not ready.')
+        with closing(read_only(path)) as db:
+            meta = {r['name']: r['value'] for r in db.execute('SELECT name, value FROM metadata')}
+            return {'source_date': meta.get('source_date', ''), 'loaded_at': meta.get('loaded_at', ''),
+                    'offers': db.execute('SELECT count(*) FROM products').fetchone()[0],
+                    'available': db.execute('SELECT count(*) FROM products WHERE available=1').fetchone()[0]}
+
     @router.post('/selection')
     def select(req: Selection, x_demo_key: str = Header(default='')):
         check(x_demo_key)

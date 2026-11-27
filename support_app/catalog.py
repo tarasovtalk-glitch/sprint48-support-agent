@@ -1,4 +1,5 @@
 import argparse
+import html
 import json
 import re
 import sqlite3
@@ -44,6 +45,11 @@ KASPERSKY_TIERS = (
 )
 
 
+def discounted(total_kopecks: int, percent: int) -> int:
+    """Сумма со скидкой: одно правило округления для чата, черновика и PDF (скидка округляется до копейки, половина — вверх)."""
+    return int(total_kopecks) - (int(total_kopecks) * int(percent) + 50) // 100
+
+
 def normalize(value: str) -> str:
     return value.casefold().replace('ё', 'е')
 
@@ -87,7 +93,7 @@ def user_range(title: str, params: dict[str, str]) -> tuple[int | None, int | No
 
 def add_offer(db: sqlite3.Connection, node, categories: dict[str, str]):
     offer_id = node.get('id')
-    title = node.findtext('name', '').strip()
+    title = html.unescape(node.findtext('name', '')).strip()  # в фиде встречается двойное экранирование: &quot;
     if not offer_id or not title:
         return
 
@@ -103,12 +109,14 @@ def add_offer(db: sqlite3.Connection, node, categories: dict[str, str]):
     category = categories.get(node.findtext('categoryId', ''), '')
     min_users, max_users = user_range(title, params)
     new_purchase = not re.search(EXPANSION_OR_MEDIA, normalize(f'{title} {params.get("Тип лицензии", "")}'))
+    price = price_kopecks(node.findtext('price', ''), node.findtext('currencyId', ''))
     cursor = db.execute('INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (
         offer_id, node.get('group_id') or offer_id, title, vendor, category,
         node.findtext('vendorCode', '').strip() or None,
         product_url(node.findtext('url', '')),
-        price_kopecks(node.findtext('price', ''), node.findtext('currencyId', '')),
-        int(node.get('available') == 'true'),
+        price,
+        # правило заказчика (брифинг 26.11): есть цена — товар в наличии; без цены («Запросить цену») — только через менеджера
+        int(bool(price and price > 0)),
         min_users, max_users,
         int(term.group(1)) if term else None, registry if number(registry) else None,
         json.dumps(params, ensure_ascii=False), int(new_purchase),
@@ -152,6 +160,7 @@ def view(row: sqlite3.Row) -> dict:
     item = dict(row)
     item.pop('rank', None)
     item['available'] = bool(item['available'])
+    item['name'] = html.unescape(item['name'])
     item['parameters'] = json.loads(item['parameters'])
     return item
 

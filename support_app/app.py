@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -18,7 +19,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units
-from .chat import buttons, customer_text, intent_cues, run_turn, tool_request
+from .knowledge import all_answers, question_for, save_answer
+from .chat import buttons, customer_text, intent_cues, lookup, run_turn, tool_request
+from .summary import cases_csv, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .model import choose_tool, classify
@@ -38,7 +41,7 @@ DEMO_SOURCE = Path(__file__).with_name('demo.json')
 
 
 class Message(BaseModel):
-    text: str | None = Field(default=None, min_length=1, max_length=1000)
+    text: str | None = Field(default=None, max_length=20000)
     action: Literal['price', 'quote', 'invoice', 'deferral', 'placement', 'focus', 'term',
                     'deployment', 'select_offer', 'handoff', 'more_discount'] | None = None
     value: str = Field(default='', max_length=32)
@@ -49,10 +52,9 @@ class Message(BaseModel):
     def one_input(self):
         if (self.text is None) == (self.action is None):
             raise ValueError('Provide exactly one of text or action.')
-        if self.text is not None and not self.text.strip():
-            raise ValueError('Enter a message.')
-        if self.text is not None and len(self.text.encode('utf-8')) > 2500:
-            raise ValueError('Message is too long.')
+        if self.text is not None and len(self.text) > 1000:
+            # длинное письмо клиента не отклоняем ошибкой: берём начало, где обычно сам вопрос
+            self.text = self.text[:1000].rsplit(' ', 1)[0]
         return self
 
 
@@ -61,10 +63,18 @@ class Decision(BaseModel):
     version: int = Field(ge=0)
     request_id: UUID
     note: str = Field(default='', max_length=400, validation_alias=AliasChoices('reply', 'note'))
+    remember: bool = False  # сохранить ответ менеджера в базу знаний: следующий клиент с тем же вопросом получит его сразу
+    remember_question: str | None = Field(default=None, max_length=1000)  # вопрос для базы, если менеджер уточнил формулировку
 
 
 class RuleConfirmation(BaseModel):
     confirmed: StrictBool
+
+
+class KnowledgeEntry(BaseModel):
+    confirmed: StrictBool
+    question: str | None = Field(default=None, max_length=1000)
+    answer: str | None = Field(default=None, max_length=1000)
 
 
 def require_key(expected: str, supplied: str):
@@ -307,7 +317,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         if 'catalog_quote' in offer:
             quote = offer['catalog_quote']
             pdf = render_catalog_quote(quote['offer'], quote['customer'], quote['quantity'], quote['source_date'],
-                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''))
+                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''),
+                                       discount=int(quote.get('discount_percent') or 0), items=quote.get('items'))
         else:
             pdf = render_pdf(row['kind'], offer, font_path)
         return Response(pdf, media_type='application/pdf', headers={
@@ -342,18 +353,34 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     COALESCE((SELECT j.created FROM journal j WHERE j.case_id=c.id AND j.event='opened' ORDER BY j.id LIMIT 1),
                              (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id LIMIT 1)) AS created,
                     (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
-                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message
+                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message,
+                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id DESC LIMIT 1) AS last_client_message
                 FROM cases c
                 WHERE (?='all' OR c.state='pending') ORDER BY c.rowid DESC LIMIT ? OFFSET ?
             ''', (state, limit, offset)).fetchall()
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
+                offer = lookup(catalog_path, context['offer_id']) if context.get('offer_id') and not context.get('quote') else None
                 cases.append({**case_view(row, use_fixture=not chat_only), 'reason': context.get('queue_reason'),
-                              'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None,
+                              'reason_text': reason_text(context.get('queue_reason')),
+                              'summary': handoff_summary(context, offer and offer['name'], row['last_client_message']),
+                              'quote': context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None,
                               'created': row['created'], 'updated': row['last_message'] or row['created'],
                               'first_client_message': row['first_client_message']})
             return {'cases': cases}
+
+    @app.get(PREFIX + '/manager/cases/export.csv')
+    def export_cases(reader: Store = Depends(cabinet_reader)):
+        """Выгрузка журнала обращений для разбора: причина, сводка, первая реплика. Открывается в Excel."""
+        rows = []
+        while len(rows) < 5000:   # постранично, не больше 5 000 обращений за выгрузку
+            page = queue(state='all', limit=100, offset=len(rows), reader=reader)['cases']
+            rows += page
+            if len(page) < 100:
+                break
+        return Response(cases_csv(rows), media_type='text/csv; charset=utf-8', headers={
+            'Content-Disposition': 'attachment; filename="cases.csv"', 'Cache-Control': 'no-store'})
 
     @app.get(PREFIX + '/manager/cases/{case_id}/messages')
     def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0), reader: Store = Depends(cabinet_reader)):
@@ -378,8 +405,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             offer = json.loads(row['offer'])
             approved = decision.choice == 'approve'
             context = chat_state(db, case_id) if chat_only else {}
-            quote = context.get('quote') if context.get('queue_reason') == 'quote_review' else None
-            if approved and quote and 'requested_users' not in quote:
+            quote = context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None
+            if approved and quote and 'requested_users' not in quote and 'items' not in quote:
                 if purchasable_units(quote['offer'], quote['quantity']) != quote['quantity']:
                     raise HTTPException(409, 'The draft quantity needs review. Reject this draft and start a new quote.')
             state = 'approved' if approved else 'rejected'
@@ -400,7 +427,19 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     append_event(db, case_id, 'catalog_quote_sent')
                 default = 'Коммерческое предложение готово.' if document_url else 'Менеджер рассмотрел запрос.'
                 save_chat_message(db, case_id, 'manager', decision.note.strip() or default, document_url=document_url)
-                return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url}
+                knowledge = None
+                if decision.remember and decision.note.strip():
+                    db.execute('SAVEPOINT knowledge')  # сбой базы знаний не откатывает ответ менеджера клиенту
+                    try:
+                        knowledge = remember_answer(db, case_id, decision.remember_question, decision.note)
+                        db.execute('RELEASE knowledge')
+                    except (HTTPException, sqlite3.Error) as error:  # решение клиенту уходит, в базу не сохраняем и говорим почему
+                        db.execute('ROLLBACK TO knowledge')
+                        db.execute('RELEASE knowledge')
+                        reason = error.detail if isinstance(error, HTTPException) else 'База знаний недоступна, ответ клиенту отправлен.'
+                        append_event(db, case_id, 'knowledge_rejected', str(reason)[:200])
+                        knowledge = {'saved': False, 'reason': reason}
+                return {**case_view(get_case(db, case_id), use_fixture=False), 'document_url': document_url, 'knowledge': knowledge}
             if approved and smtp_host:
                 offer['payment_due'] = due_date(offer)
                 queue_mail(db, case_id, 'approved', offer)
@@ -427,11 +466,33 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 append_event(db, case_id, 'contract_rule_saved', offer['contract_ref'])
             return {'contract_ref': offer['contract_ref'], 'days': offer['requested_days'], 'source_case': case_id}
 
+    def remember_answer(db, case_id: str, question: str | None, answer: str | None) -> dict:
+        messages = read_chat_messages(db, case_id)
+        if not answer:
+            row = get_case(db, case_id)
+            last = next((m['text'] for m in reversed(messages) if m['role'] == 'manager'), '')
+            answer = row['decision_note'] or last
+        try:
+            entry = save_answer(db, case_id, question or question_for(messages), answer or '')
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        append_event(db, case_id, 'knowledge_saved', str(entry['id']))
+        return {**entry, 'saved': True}
+
+    @app.post(PREFIX + '/manager/cases/{case_id}/knowledge', dependencies=[Depends(manager)])
+    def save_knowledge(case_id: str, payload: KnowledgeEntry):
+        if not payload.confirmed:
+            raise HTTPException(422, 'Confirm saving the answer to the knowledge base.')
+        with store.connect(write=True) as db:
+            get_case(db, case_id)
+            return remember_answer(db, case_id, payload.question, payload.answer)
+
     @app.get(PREFIX + '/manager/knowledge')
     def knowledge(reader: Store = Depends(cabinet_reader)):
         with reader.connect() as db:
             rows = db.execute('SELECT * FROM rules ORDER BY rowid DESC LIMIT 50').fetchall()
-        return {'rules': [dict(row) for row in rows]}
+            answers = all_answers(db) if reader is store else []
+        return {'rules': [dict(row) for row in rows], 'answers': answers}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/journal')
     def journal(case_id: str, reader: Store = Depends(cabinet_reader)):
