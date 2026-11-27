@@ -86,12 +86,28 @@ def test_post_purchase_keeps_context_and_closing_has_no_question(client):
     r = c3.say('жду ответа')
     assert '?' not in r['reply']
 
+    activation = Chat(client)
+    first = activation.say('ключ не активируется, пишет что недействителен')
+    assert 'лишние пробелы' in first['reply'] and activation.state == 'open'
+    reply = activation.say('ввёл заново аккуратно, всё равно не активируется')['reply']
+    assert activation.state == 'pending' and 'Передал запрос менеджеру' in reply
+    assert 'лишние пробелы' not in reply
+
+    refund = Chat(client)
+    first = refund.say('хочу вернуть лицензию, ошиблись с версией')
+    assert 'возврат' in first['reply'] and refund.state == 'open'
+    assert 'Продолжим подбор' not in first['reply']
+    reply = refund.say('ключ ещё не активировали')['reply']
+    assert refund.state == 'pending' and 'Передал запрос менеджеру' in reply
+
 
 def test_mdaemon_standard_honest_and_quote(chat):
     r = chat.say('Нужен MDaemon Standard')
     assert 'не нашёл' in r['reply'] and 'Messaging Server' in r['reply']
     r = chat.say('на 20 пользователей, на год')
     assert 'MDaemon' in r['reply'] and r['buttons']
+    assert 'Ближайшая позиция — MDaemon Messaging Server.' in r['reply']
+    assert 'MDaemon Standard:' not in r['reply']
     r = chat.say(REQ)
     assert 'Черновик КП' in r['reply'] and chat.state == 'pending'
 

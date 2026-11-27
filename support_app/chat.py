@@ -24,7 +24,7 @@ REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр
 EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|тендер|госзакупк')
 TENDER = re.compile(r'\b(?:44|223)\s*[-‐‑–—]?\s*фз\b|тендер|госзакупк|\bкотировк|проект\w*\s+(?:контракт|договор)')
 DEFERRED_PAYMENT = re.compile(r'оплат\w*.{0,40}через\s+\d+\s+(?:дн|месяц)|отсроч\w*\s+на\s+\d+\s+(?:дн|месяц)')
-SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+ещ[её]|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
+SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+(?:ещ[её]|равно)|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
 INVOICE_REQUEST = re.compile(r'\b(?:выстав\w*|пришл\w*|сформируй\w*|нужен|хочу)\s+(?:\w+\s+){0,2}сч[её]т\b')
 KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
 ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
@@ -399,24 +399,25 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
             for group in registry_selection(catalog_db, req):
                 enriched.setdefault(group['topic'], group)
             result['groups'] = list(enriched.values())
-    shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
+    shown = [(group, offer) for group in result['groups'] for offer in group['offers'][:1]]
     state.pop('needs_quote_items', None)
     if not shown:
         state.pop('offered_ids', None)
         return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
     state['offered_ids'] = [offer['id'] for _, offer in shown]
     lines = ['Варианты по данным каталога.' + (' Все варианты есть в реестре отечественного ПО, совместимость с вашими требованиями нужно проверить.' if registry else '')]
-    if state['flow'] == 'mdaemon':
-        lines.append('Точное название Standard в каталоге не нашёл, ниже MDaemon Messaging Server.')
+    if state['flow'] == 'mdaemon' and not shown[0][0]['exact_terms_found']:
+        lines.append('Редакции MDaemon Standard в каталоге нет. Ближайшая позиция — MDaemon Messaging Server.')
     if state.get('term_assumed'):
         lines.append('Срок вы не назвали — показываю на 12 месяцев; нужен другой срок — напишите.')
     quote_items = []
-    for topic, offer in shown:
+    for group, offer in shown:
+        title = offer['name'] if state['flow'] == 'mdaemon' else f'{group["topic"]}: {offer["name"]}'
         price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
         registry_text = f', реестр № {offer["registry"]}' if registry and offer.get('registry') else ''
         units = purchasable_units(offer, state['quantity'])
         total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
-        lines += ['', f'{topic}: {offer["name"]}', f'{price}{total}{registry_text}']
+        lines += ['', title, f'{price}{total}{registry_text}']
         if offer.get('url'):
             lines.append(f'Карточка: {offer["url"]}')
         if note := (offer.get('parameters') or {}).get('Условия поставки'):
@@ -430,7 +431,7 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     def label(topic, offer):
         name = normalize(offer['name'])
         return topic if all(w[:4] in name for w in normalize(topic).split()) else offer['name'][:45]
-    return '\n'.join(lines), [('Выбрать: ' + label(topic, offer), 'select_offer', offer['id']) for topic, offer in shown]
+    return '\n'.join(lines), [('Выбрать: ' + label(group['topic'], offer), 'select_offer', offer['id']) for group, offer in shown]
 
 
 # просьба позвать человека; «согласовать через менеджера» — это вопрос, а не просьба
@@ -521,6 +522,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         # бот сам попросил детали по заказу — принимаем их в обращение, а не ищем товар по случайным словам
         append_event(db, row['id'], 'customer_details', 'order')
         return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
+    if (not action and state.get('post_purchase_reason') == 'order_question'
+            and re.search(r'\bключ\s+(?:ещ[её]\s+)?не\s+активировали\b', query)):
+        return 'Менеджер проверит условия по вашему заказу. ' + enter_queue(db, row, state, 'order_question'), []
     topic = support_topic(query) if text and not action and not QUOTE_REQUISITES.search(text) else None
     if topic:   # «купил КриптоПро, не активируется ключ» — вопрос по заказу, а не новая продажа
         answer, reason = topic
@@ -530,7 +534,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['post_purchase_reason'] = reason
         if EXTRA_PURCHASE.search(query):   # «…и ещё нужен Office на 5 мест» — вторую часть не теряем
             answer += 'Покупку из вашего сообщения посчитаю отдельно — напишите её следующим сообщением. '
-        if (already_helped and SUPPORT_TRIED.search(query)) or re.search(r'спам\w*.{0,25}проверен', query):
+        if already_helped and SUPPORT_TRIED.search(query):
+            return enter_queue(db, row, state, state.get('post_purchase_reason', 'order_question')), []
+        if re.search(r'спам\w*.{0,25}проверен', query):
             return answer + ' ' + enter_queue(db, row, state, state.get('post_purchase_reason', 'order_question')), []
         return answer, JOIN_MANAGER
     if (state.get('post_purchase') and text and not action and not is_closing(text)
