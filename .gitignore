@@ -14,3 +14,7 @@ token_max.conf
 .venv/
 __pycache__/
 *.sqlite3*
+tests/data/catalog-mini.sqlite3
+__pycache__/
+.pytest_cache/
+eval/out/
