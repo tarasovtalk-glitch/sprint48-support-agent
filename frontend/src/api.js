@@ -398,6 +398,16 @@
   var MONTH_CAP = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   var MONTH_IN = ['за январь', 'за февраль', 'за март', 'за апрель', 'за май', 'за июнь', 'за июль', 'за август', 'за сентябрь', 'за октябрь', 'за ноябрь', 'за декабрь'];
   function group3(n) { return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0'); }
+  function agentSpeed(m) {
+    if (m.agent_reply_median_ms == null) return 'нет ответов';
+    return decRu(m.agent_reply_median_ms / 1000, 2) + ' с · медиана ' + group3(m.agent_replies) + ' отв.';
+  }
+  function managerSpeed(m) {
+    var s = m.manager_reply_median_s;
+    if (s == null) return 'нет ответов';
+    var text = s < 60 ? Math.round(s) + ' с' : s < 3600 ? Math.round(s / 60) + ' мин' : decRu(s / 3600, 1) + ' ч';
+    return text + ' · медиана ' + group3(m.manager_replies) + ' отв.';
+  }
   function decRu(n, d) { return (Math.round((n || 0) * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d).replace('.', ','); }
   function formatCatalogDate(s) {
     if (!s) return '';
@@ -494,8 +504,8 @@
           handed: m.handed_to_manager || 0,
           unfinished: m.unfinished || 0
         },
-        speed: [['Агент отвечает клиенту за', '1,07 с'], ['Менеджер отвечает в среднем за', '≈2 мин']],
-        speed_note: 'Время агента замерено на стенде (медиана API), время менеджера назвал Softline.',
+        speed: [['Агент отвечает клиенту за', agentSpeed(m)], ['Менеджер отвечает за', managerSpeed(m)]],
+        speed_note: 'Живой замер на этом стенде: медиана по последним ответам агента и по ответам менеджера после передачи.',
         days: days,
         today_day: todayDay,
         today_rub: todayRub,

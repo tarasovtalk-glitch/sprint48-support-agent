@@ -18,6 +18,7 @@ from urllib.parse import quote as url_quote
 from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units, read_only
@@ -27,6 +28,7 @@ from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .notify import Telegram, in_background
+from .proof import load_run, render as render_proof
 from .webim import WebimClient, button_id, parse_event
 from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
 from .scenario import load_scenario
@@ -268,6 +270,14 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     @app.post(PREFIX + '/case/messages', dependencies=[Depends(public_demo)])
     def message(payload: Message, case_id: str = Depends(client)):
+        started = time.perf_counter()
+        result = chat_turn(payload, case_id)
+        with store.connect(write=True) as db:  # живая скорость ответа агента — для кабинета
+            db.execute('INSERT INTO reply_times(case_id, ms) VALUES (?, ?)',
+                       (case_id, round((time.perf_counter() - started) * 1000)))
+        return result
+
+    def chat_turn(payload: Message, case_id: str):
         if chat_only:
             if payload.channel != 'chat':
                 raise HTTPException(422, 'This stand accepts chat messages only.')
@@ -552,6 +562,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 {'code': r['code'], 'title': reason_text(r['code']) or 'Передано менеджеру', 'count': r['cnt']}
                 for r in reason_rows
             ]
+            speed = reply_speed(db, excl)
         catalog_info = None
         if catalog_path.is_file():
             try:
@@ -589,7 +600,12 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             'catalog': catalog_info,
             'year': now_msk.year, 'month': now_msk.month, 'day': now_msk.day, 'days_in_month': days_in_month,
             'sample': reader is not store,
+            **speed,
         }
+
+    @app.get(PREFIX + '/proof', response_class=HTMLResponse)
+    def proof():
+        return HTMLResponse(render_proof(load_run(), manager_metrics(store)), headers={'Cache-Control': 'no-store'})
 
     @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
@@ -814,6 +830,31 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         return {'events': [dict(e) for e in events], 'usage': [dict(u) for u in usage], 'messages': messages}
 
     return app
+
+
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered, middle = sorted(values), len(values) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def reply_speed(db, excluded: str) -> dict:
+    """Живая скорость: агент — медиана времени обработки реплики сервером; менеджер — от передачи до первого ответа."""
+    agent = [r[0] for r in db.execute(
+        'SELECT ms FROM reply_times WHERE case_id NOT IN (SELECT value FROM json_each(?)) ORDER BY id DESC LIMIT 1000',
+        (excluded,))]
+    manager = [r[0] for r in db.execute('''
+        SELECT (julianday(MIN(m.created)) - julianday(h.at)) * 86400
+        FROM (SELECT case_id, MIN(created) AS at FROM journal WHERE event = 'sent_to_manager' GROUP BY case_id) h
+        JOIN chat_messages m ON m.case_id = h.case_id AND m.role = 'manager' AND m.created >= h.at
+        WHERE h.case_id NOT IN (SELECT value FROM json_each(?))
+        GROUP BY h.case_id''', (excluded,))]
+    agent_ms, manager_s = median(agent), median(manager)
+    return {'agent_reply_median_ms': None if agent_ms is None else round(agent_ms),
+            'agent_replies': len(agent),
+            'manager_reply_median_s': None if manager_s is None else round(manager_s),
+            'manager_replies': len(manager)}
 
 
 def deployment_app():

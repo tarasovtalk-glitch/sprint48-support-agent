@@ -98,6 +98,12 @@ CREATE TABLE IF NOT EXISTS webim_chats (
 CREATE TABLE IF NOT EXISTS webim_seen (
     message_id TEXT PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS reply_times (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id),
+    ms INTEGER NOT NULL,
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 

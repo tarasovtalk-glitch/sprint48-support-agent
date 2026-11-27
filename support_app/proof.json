@@ -1,0 +1,15 @@
+{
+  "version": "9753bbe",
+  "date": "27.11.2026",
+  "dialogues": 121,
+  "replies": 313,
+  "auto": 226,
+  "ok": 192,
+  "bad": 34,
+  "cabinet": 87,
+  "strict": 28,
+  "dangerous": 0,
+  "attacks_ok": 22,
+  "attacks": 22,
+  "median_s": "0,30"
+}
