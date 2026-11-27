@@ -152,16 +152,9 @@
           : tab === 'knowledge' ? viewKnowledge() : viewAgent();
         var fresh = ui.lastTab !== tab + ui.sub;
         ui.lastTab = tab + ui.sub;
-        var keep = {};
-        $$('[data-scroll]', v).forEach(function (node) { keep[node.dataset.scroll] = node.scrollTop; });
         v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
         renderTop(); restoreDrafts(); ensureTalk(); foldLong();
-        if (!fresh) {
-          $$('[data-scroll]', v).forEach(function (node) { node.scrollTop = keep[node.dataset.scroll] || 0; });
-        } else if (window.matchMedia('(min-width:761px)').matches) {
-          var selected = $('.panel--fit .is-selected', v);
-          if (selected) selected.scrollIntoView({ block: 'nearest' });
-        }
+        if (fresh) window.scrollTo(0, 0);
       });
     }
     if (DEMO || store.role) return renderSection();
@@ -176,6 +169,18 @@
       ui.drafts = {};
       v.innerHTML = '';
       renderTop();
+    });
+  }
+
+  function revealCase(tab, id) {
+    if (ui.tab !== tab || (tab === 'today' ? ui.sel : ui.jSel) !== id) return;
+    var pane = $('#view .main > .pane');
+    if (!pane) return;
+    var top = pane.getBoundingClientRect().top;
+    if (top >= 0 && top < window.innerHeight - 120) return;
+    window.scrollTo({
+      top: Math.max(0, window.scrollY + top - 16),
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
     });
   }
 
@@ -259,11 +264,11 @@
     }
     var c = findCase(ui.sel), swap = ui.lastSel !== ui.sel; ui.lastSel = ui.sel;
     var st = status();
-    var head = '<section class="panel panel--fit" aria-label="Ждут решения"><div class="panel__head"><h2 class="h2">Ждут решения</h2>' + counter(list.length) + '</div>' +
+    var head = '<section class="panel" aria-label="Ждут решения"><div class="panel__head"><h2 class="h2">Ждут решения</h2>' + counter(list.length) + '</div>' +
       (st.state === 'limit' || st.state === 'paused' ? '<p class="panel__note">' + t((st.since ? 'С ' + st.since + ' ' : 'Сейчас ') + 'агент молчит: новые чаты приходят сюда без его сводки.') + '</p>' : '') +
-      (list.length > QUEUE_GROUPS_FROM ? queueGroups(list) : '<div class="queue" data-scroll="list">' + list.map(function (x) { return queueRow(x); }).join('') + '</div>') + '</section>';
-    return '<div class="today">' + head + '<div class="main" data-scroll="main:' + esc(c.id) + '"><div class="pane' + (swap ? ' swap-in' : '') + '" data-scroll="case:' + esc(c.id) + '">' + caseCard(c, 'today') + '</div>' +
-      '<div class="side pane' + (swap ? ' swap-in' : '') + '" data-scroll="side:' + esc(c.id) + '">' + talkPanel(c, true) + '</div></div></div>';
+      (list.length > QUEUE_GROUPS_FROM ? queueGroups(list) : '<div class="queue">' + list.map(function (x) { return queueRow(x); }).join('') + '</div>') + '</section>';
+    return '<div class="today">' + head + '<div class="main"><div class="pane' + (swap ? ' swap-in' : '') + '">' + caseCard(c, 'today') + '</div>' +
+      '<div class="side pane' + (swap ? ' swap-in' : '') + '">' + talkPanel(c, true) + '</div></div></div>';
   }
   function avatar(c, size) {
     var a = '<span class="avatar' + (size === 24 ? ' avatar--24' : '') + '" aria-hidden="true">' + esc(c.initials || 'К') + '</span>';
@@ -285,7 +290,7 @@
     });
     groups.sort(function (a, b) { return (b.label === IN_CHAT) - (a.label === IN_CHAT); });
     return '<label class="search">' + IC.search + '<input class="field" type="search" data-act="qsearch" placeholder="Клиент, ИНН или слова из чата" aria-label="Поиск по обращениям" value="' + esc(ui.qQuery) + '"></label>' +
-      '<div class="groups" data-scroll="list">' + (groups.length ? groups.map(function (g, i) {
+      '<div class="groups">' + (groups.length ? groups.map(function (g, i) {
         var key = g.label, isOpen = !!q || (ui.qOpen[key] != null ? ui.qOpen[key] : i === 0 || g.items.some(function (c) { return c.id === ui.sel; }));
         return '<div class="group"><button class="ghead" type="button" data-act="qgroup" data-key="' + esc(key) + '" data-open="' + isOpen + '" aria-expanded="' + isOpen + '"><span>' + t(g.label) + '</span>' + counter(g.items.length, true) + IC.chev + '</button>' +
           (isOpen ? '<div class="glist queue">' + g.items.map(function (c) { return queueRow(c, true); }).join('') + '</div>' : '') + '</div>';
@@ -526,23 +531,22 @@
       ui.jSel = shown.some(function (i) { return i.id === pref; }) && sameDay(day, new Date()) ? pref : shown.length ? shown[0].id : null;
     }
     var groups = jGroups(shown, day), dk = day.toDateString(), filtered = !!(q || ui.jFilter);
-    var left = '<section class="panel panel--fit" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
+    var left = '<section class="panel" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
       '<div class="jhead-actions"><button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button>' +
       (DEMO || store.role === 'jury' ? '' : '<button class="icon-btn" type="button" data-act="export-csv" title="Скачать журнал за день" aria-label="Скачать журнал за день">' + IC.download + '</button>') +
       '</div></div>' +
       '<div class="chips"><button class="chip' + (ui.jFilter === 'open' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="open" aria-pressed="' + (ui.jFilter === 'open') + '">Не закрыты' + counter(open, true) + '</button>' +
       '<button class="chip' + (ui.jFilter === 'review' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="review" aria-pressed="' + (ui.jFilter === 'review') + '">Проверить' + counter(review, !review) + '</button></div>' +
       '<label class="search">' + IC.search + '<input class="field" type="search" data-act="jsearch" placeholder="Клиент, ИНН или № заказа" aria-label="Поиск по журналу" value="' + esc(ui.jQuery) + '"></label>' +
-      '<div class="groups" data-scroll="list">' + (groups.length ? groups.map(function (g, i) {
+      '<div class="groups">' + (groups.length ? groups.map(function (g, i) {
         var key = dk + g.id, isOpen = filtered || (ui.jOpen[key] != null ? ui.jOpen[key] : i === 0);
         return '<div class="group"><button class="ghead" type="button" data-act="jgroup" data-key="' + esc(key) + '" data-open="' + isOpen + '" aria-expanded="' + isOpen + '"><span>' + t(g.label) + '</span>' + counter(g.items.length, true) + IC.chev + '</button>' +
           (isOpen ? '<div class="glist">' + g.items.map(jRow).join('') + '</div>' : '') + '</div>';
       }).join('') : '<p class="nothing">' + t(q ? 'Ничего не нашлось. Попробуйте название компании, ИНН или номер заказа' : ui.jFilter === 'review' ? 'Проверять нечего' : ui.jFilter === 'open' ? 'Незакрытых разговоров нет' : 'Разговоров за этот день нет') + '</p>') + '</div></section>';
     var it = jSelected(), c = jDetail(it), swap = ui.lastSel !== 'j' + ui.jSel; ui.lastSel = 'j' + ui.jSel;
     var side = c ? talkPanel(c, false) + (c.cost ? '<section class="card cost"><p class="medium">Во что обошёлся</p>' + facts(c.cost) + '</section>' : '') : '';
-    var key = esc(c ? c.id : 'none');
-    return '<div class="today">' + left + '<div class="main" data-scroll="main:' + key + '"><div class="pane' + (swap ? ' swap-in' : '') + '" data-scroll="case:' + key + '">' + (c ? caseCard(c, 'journal') : '<section class="case"><p class="muted">Выберите разговор слева</p></section>') + '</div>' +
-      '<div class="side pane' + (swap ? ' swap-in' : '') + '" data-scroll="side:' + key + '">' + side + '</div></div></div>';
+    return '<div class="today">' + left + '<div class="main"><div class="pane' + (swap ? ' swap-in' : '') + '">' + (c ? caseCard(c, 'journal') : '<section class="case"><p class="muted">Выберите разговор слева</p></section>') + '</div>' +
+      '<div class="side pane' + (swap ? ' swap-in' : '') + '">' + side + '</div></div></div>';
   }
   function jRow(it) {
     var s = jStatus(it), sel = it.id === ui.jSel;
@@ -567,14 +571,14 @@
     var match = function (x) { return !q || (x.title + ' ' + (x.meta || '') + ' ' + (x.text || '')).toLowerCase().indexOf(q) >= 0; };
     var rules = (k.rules || []).filter(match), arts = (k.articles || []).filter(match);
     var shownArts = ui.kAll || q ? arts : arts.slice(0, 5);
-    var left = store.role === 'jury' ? viewJuryPractice() : '<section class="panel panel--fit" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
-      (pending.length + gaps.length + fixes.length ? '<div class="groups" data-scroll="kleft">' +
+    var left = store.role === 'jury' ? viewJuryPractice() : '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
+      (pending.length + gaps.length + fixes.length ? '<div class="groups">' +
         (pending.length ? kGroup('pending', 'Ответы для справки', pending.length, pending.map(function (p) { return plate('kpending', p); }).join('')) : '') +
         (gaps.length ? kGroup('gaps', 'Темы без ответа', gaps.length, gaps.map(function (g) { return plate('kgap', g, g.share); }).join('')) : '') +
         (fixes.length ? kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.map(function (f) { return plate('kfix', f); }).join('')) : '') + '</div>'
         : '<p class="nothing">' + t('Всё разобрано: новых ответов, тем и поправок нет') + '</p>') + '</section>';
-    var right = '<section class="panel panel--fit" aria-label="Что знает агент"><h2 class="h2">Что знает агент</h2>' +
-      '<label class="search">' + IC.search + '<input class="field" type="search" data-act="ksearch" placeholder="Правило, статья или слово" aria-label="Поиск по знаниям агента" value="' + esc(ui.kQuery) + '"></label><div class="groups" data-scroll="kright">' +
+    var right = '<section class="panel" aria-label="Что знает агент"><h2 class="h2">Что знает агент</h2>' +
+      '<label class="search">' + IC.search + '<input class="field" type="search" data-act="ksearch" placeholder="Правило, статья или слово" aria-label="Поиск по знаниям агента" value="' + esc(ui.kQuery) + '"></label><div class="groups">' +
       kGroup('rules', 'Правила агента', rules.length, rules.length ? rules.map(function (r) { return plate('krule', r); }).join('') : '<p class="nothing">Правил не нашлось</p>') +
       kGroup('arts', 'Статьи справки', q ? arts.length : (k.articles || []).length, shownArts.length ? shownArts.map(function (a) { return plate('karticle', a); }).join('') : '<p class="nothing">Статей не нашлось</p>') +
       '</div>' + (!q && !ui.kAll && arts.length > 5 && ui.kOpen.arts !== false ? '<div><button class="btn btn--grey" type="button" data-act="kall">Все статьи</button></div>' : '') + '</section>';
@@ -584,7 +588,7 @@
   var juryPractice = { question: 'Как получить копию закрывающих документов?', answer: '', next: 'Как получить копию закрывающих документов?', result: '', saved: false };
   function viewJuryPractice() {
     var p = juryPractice;
-    return '<section class="panel pane" data-scroll="jury-practice"><h2 class="h2">Проверить память агента</h2>' +
+    return '<section class="panel pane"><h2 class="h2">Проверить память агента</h2>' +
       '<form class="reply" data-jury-practice="remember"><label class="label">Вопрос клиента<input class="field" required name="question" maxlength="400" value="' + esc(p.question) + '"></label>' +
       '<label class="label">Ответ менеджера<textarea class="field" required name="answer" maxlength="400" rows="3">' + esc(p.answer) + '</textarea></label>' +
       '<button class="btn btn--accent" type="submit">Ответить и запомнить</button></form><hr class="dash">' +
@@ -676,7 +680,7 @@
       '<div class="facts" style="gap:12px"><label class="calc"><span>' + t((s.benefit || {}).minutes_hint || 'Минут на обращение') + '</span><input class="field field--num" inputmode="numeric" data-act="bmin" value="' + esc(bb.minutes) + '"></label>' +
       '<label class="calc"><span>' + t((s.benefit || {}).rate_hint || 'Час менеджера, ₽') + '</span><input class="field field--num" inputmode="numeric" data-act="brate" value="' + esc(group3(bb.rate)) + '"></label></div>' +
       '<p class="panel__note">' + t(s.benefit_note || '') + '</p></section>';
-    return '<div class="agent-cols"><div class="col pane" data-scroll="col1">' + left + '</div><div class="col pane" data-scroll="col2">' + right + '</div></div>';
+    return '<div class="agent-cols"><div class="col pane">' + left + '</div><div class="col pane">' + right + '</div></div>';
   }
   function benefitFacts(b) { return fact('Время менеджеров', '≈' + Math.round(b.hours) + ' ч') + fact('Расходы на агента', money(b.cost)) + fact('На 1 ₽ расходов', '≈' + group3(Math.round(b.per)) + ' ₽'); }
   function dayName(s, d) { var x = new Date(s.year || new Date().getFullYear(), s.month_index || 0, d); return d + ' ' + MONTHS[x.getMonth()] + ', ' + WEEKDAYS[x.getDay()]; }
@@ -708,7 +712,7 @@
     if (jury) {
       var curModel = byId(s.models || [], s.model) || (s.models || [])[0] || { name: 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' };
       var curChan = byId(s.channels || [], s.channel);
-      return '<div class="settings-cols pane" data-scroll="settings">' +
+      return '<div class="settings-cols pane">' +
         '<section class="panel"><h2 class="h2">Лимит на работу агента</h2>' +
         facts([['Лимит в месяц', money(s.limit_rub || 0)], ['Предупредить при', money(s.warn_rub || 0)]]) +
         '<p>' + rich('Когда лимит потрачен, агент **молчит до 1-го числа**, чаты идут менеджерам.') + '</p></section>' +
@@ -746,7 +750,7 @@
       var on = s.model === m.id;
       return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="model" data-id="' + esc(m.id) + '"' + dis + '><b>' + t(m.name) + '</b><span>' + t(m.cost) + '</span></button>';
     }).join('') + '</div><p>' + rich('Модель **меняется сразу**: следующие обращения агент разберёт уже на ней.') + '</p><p class="panel__note">' + t(s.model_note || '') + '</p></section>';
-    return '<div class="settings-cols pane" data-scroll="settings">' + limit + hours + notify + model + '</div>';
+    return '<div class="settings-cols pane">' + limit + hours + notify + model + '</div>';
   }
   function saveSettings(patch, done) {
     var s = store.settings;
@@ -973,7 +977,7 @@
 
     switch (a) {
       /* Сегодня */
-      case 'pick': ui.sel = id; render(); return;
+      case 'pick': ui.sel = id; render().then(function () { revealCase('today', id); }); return;
       case 'kp-toggle': ui.kpClosed[id] = !ui.kpClosed[id]; render(); return;
       case 'edit-kp': ui.kpEdit[id] = true; ui.discount[id] = (c.kp && c.kp.discount) || 0; render().then(function () { var f = $('#disc-' + id); if (f) { f.focus(); f.select(); } }); return;
       case 'cancel-edit': ui.kpEdit[id] = false; ui.discount[id] = 0; render(); return;
@@ -1034,7 +1038,7 @@
       case 'jfilter': var key = b.getAttribute('data-key'); ui.jFilter = ui.jFilter === key ? null : key; ui.jSel = null; render(); return;
       case 'jgroup': ui.jOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
       case 'qgroup': ui.qOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
-      case 'jpick': ui.jSel = id; render(); return;
+      case 'jpick': ui.jSel = id; render().then(function () { revealCase('journal', id); }); return;
       case 'jfix': case 'jok': return review(a, id);
 
       /* Знания */
