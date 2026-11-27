@@ -14,6 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from typing import Literal
+from urllib.parse import quote as url_quote
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
@@ -22,7 +23,7 @@ from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 from .catalog import purchasable_units, read_only
 from .knowledge import AGENT_RULES, BUILT_IN_ARTICLES, all_answers, question_for, save_answer
 from .chat import buttons, customer_text, intent_cues, lookup, run_turn, tool_request
-from .summary import cases_csv, handoff_summary, reason_text
+from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .model import choose_tool, classify
@@ -478,22 +479,46 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 cases.append({**case_view(row, use_fixture=not chat_only), 'reason': context.get('queue_reason'),
                               'reason_text': reason_text(context.get('queue_reason')),
                               'summary': handoff_summary(context, offer and offer['name'], row['last_client_message']),
+                              'summary_facts': handoff_facts(context, offer and offer['name']),
                               'quote': context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None,
                               'created': row['created'], 'updated': row['last_message'] or row['created'],
                               'first_client_message': row['first_client_message']})
             return {'cases': cases}
 
     @app.get(PREFIX + '/manager/cases/export.csv')
-    def export_cases(reader: Store = Depends(cabinet_reader)):
+    def export_cases(day: str | None = Query(default=None), tz_offset: int = Query(default=180, ge=-720, le=840),
+                     reader: Store = Depends(cabinet_reader)):
         """Выгрузка журнала обращений для разбора: причина, сводка, первая реплика. Открывается в Excel."""
+        if day is not None and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
+            raise HTTPException(422, 'Invalid day format, expected YYYY-MM-DD.')
         rows = []
         while len(rows) < 5000:   # постранично, не больше 5 000 обращений за выгрузку
             page = queue(state='all', limit=100, offset=len(rows), reader=reader)['cases']
             rows += page
             if len(page) < 100:
                 break
+        if day:
+            shift = timedelta(minutes=tz_offset)
+            filtered = []
+            for row in rows:
+                stamp = row.get('updated') or row.get('created') or ''
+                try:
+                    dt = datetime.fromisoformat(stamp.replace('Z', '+00:00').replace(' ', 'T'))
+                    if dt.tzinfo is not None:
+                        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                    if (dt + shift).date().isoformat() == day:
+                        filtered.append(row)
+                except ValueError:
+                    pass
+            rows = filtered
+            d_label = '.'.join(reversed(day.split('-')))
+            ru_name = f'Журнал обращений, {d_label}.csv'
+            disposition = f'attachment; filename="cases-{day}.csv"; filename*=UTF-8\'\'{url_quote(ru_name)}'
+        else:
+            ru_name = 'Журнал обращений.csv'
+            disposition = f'attachment; filename="cases.csv"; filename*=UTF-8\'\'{url_quote(ru_name)}'
         return Response(cases_csv(rows), media_type='text/csv; charset=utf-8', headers={
-            'Content-Disposition': 'attachment; filename="cases.csv"', 'Cache-Control': 'no-store'})
+            'Content-Disposition': disposition, 'Cache-Control': 'no-store'})
 
     @app.get(PREFIX + '/manager/cases/{case_id}/messages')
     def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0), reader: Store = Depends(cabinet_reader)):

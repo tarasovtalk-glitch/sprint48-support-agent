@@ -163,6 +163,11 @@ b,strong{font-weight:500}
 .panel{background:#fff;border-radius:20px;padding:20px;display:flex;flex-direction:column;gap:16px;box-shadow:var(--sh-panel);min-width:0}
 .panel__head{display:flex;align-items:center;gap:8px;min-height:28px}
 .panel__head--between{justify-content:space-between}
+.jhead-actions{display:flex;align-items:center;gap:8px}
+.icon-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:20px;background:var(--panel);color:var(--ink);transition:background-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease)}
+.icon-btn:hover{background:var(--plate-hover)}
+.icon-btn:active{background:var(--plate-pressed)}
+.icon-btn:focus-visible{box-shadow:var(--ring)}
 .panel__note{color:var(--muted)}
 .card{background:#fff;border-radius:20px;box-shadow:var(--sh-card);min-width:0}
 

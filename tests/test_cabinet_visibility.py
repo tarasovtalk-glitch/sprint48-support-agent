@@ -36,6 +36,10 @@ def test_cabinet_shows_jury_examples_and_hides_confirmed_test_cases(tmp_path, mo
             assert [case['id'] for case in client.get(prefix + '/cases' + query, headers=manager).json()['cases']] == [real_case]
         report = client.get(prefix + '/cases/export.csv', headers=manager).text
         assert real_case in report and test_case not in report
+        empty_day = client.get(prefix + '/cases/export.csv?day=2020-01-01', headers=manager)
+        assert empty_day.status_code == 200 and real_case not in empty_day.text
+        assert 'cases-2020-01-01.csv' in empty_day.headers['content-disposition']
+        assert client.get(prefix + '/cases/export.csv?day=bad', headers=manager).status_code == 422
         assert client.get(prefix + '/cases/' + test_case + '/journal', headers=manager).status_code == 200
         kb = client.get(prefix + '/knowledge', headers=manager).json()
         assert len(kb['agent_rules']) >= 3 and len(kb['articles']) >= 10

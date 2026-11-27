@@ -385,25 +385,25 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
         state.pop('offered_ids', None)
         return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
     state['offered_ids'] = [offer['id'] for _, offer in shown]
-    lines = ['Варианты по данным каталога:']
+    lines = ['Варианты по данным каталога.' + (' Все варианты есть в реестре отечественного ПО, совместимость с вашими требованиями нужно проверить.' if registry else '')]
     if state['flow'] == 'mdaemon':
-        lines.append('Точное название Standard в фиде не подтверждено. Ниже — MDaemon Messaging Server для проверки.')
+        lines.append('Точное название Standard в каталоге не нашёл, ниже MDaemon Messaging Server.')
     if state.get('term_assumed'):
         lines.append('Срок вы не назвали — показываю на 12 месяцев; нужен другой срок — напишите.')
-    if registry:
-        lines.append('Номера из реестра отечественного ПО. Источник указан рядом, если он известен.')
     quote_items = []
     for topic, offer in shown:
         price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
-        registry_text = f', реестр № {offer["registry"]} {offer.get("registry_source", "")}' if registry else ''
+        registry_text = f', реестр № {offer["registry"]}' if registry and offer.get('registry') else ''
         units = purchasable_units(offer, state['quantity'])
         total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
-        lines.append(f'{topic}: {offer["name"]} — {price}{total}{registry_text}. Карточка: {offer["url"] or ""}')
+        lines += ['', f'{topic}: {offer["name"]}', f'{price}{total}{registry_text}']
+        if offer.get('url'):
+            lines.append(f'Карточка: {offer["url"]}')
         if units and offer['available'] and offer['price_kopecks']:
             quote_items.append({'id': offer['id'], 'quantity': state['quantity'], 'units': units})
     if state['flow'] == 'needs' and len(quote_items) == len(shown):
         state['needs_quote_items'] = quote_items
-        lines.append('Для одного КП на все позиции пришлите название организации, ИНН и КПП.')
+        lines += ['', 'Для одного КП на все позиции пришлите название организации, ИНН и КПП.']
     # на кнопке — название того, что выбирает клиент, а не тема запроса («MDaemon Standard» вёл к Messaging Server)
     def label(topic, offer):
         name = normalize(offer['name'])

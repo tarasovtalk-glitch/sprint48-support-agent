@@ -53,7 +53,8 @@
     search: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M14.2 9A5.2 5.2 0 1 1 3.8 9a5.2 5.2 0 0 1 10.4 0Z" stroke="#67646F" stroke-width="1.6"/><path d="M13 13L16.2 16.2" stroke="#67646F" stroke-width="1.6" stroke-linecap="round"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.4L6.4 11.2L12.5 4.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     prev: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8L10 12" stroke="#393446" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    next: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4L10 8L6 12" stroke="#393446" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    next: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4L10 8L6 12" stroke="#393446" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    download: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 3v8.5M5.5 8.5L9 12l3.5-3.5M3.5 14.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
   };
   var BOT = '<img class="avatar avatar--24 avatar--bot" src="avatar-bot.svg" width="24" height="24" alt="">';
   function badge(tone, text) { return '<span class="badge"><span class="dot dot--' + tone + '" aria-hidden="true"></span>' + t(text) + '</span>'; }
@@ -202,16 +203,18 @@
   /* ---------- шапка: счётчик, состояние агента, строка-предупреждение ---------- */
   function renderTop() {
     var profile = $('#user');
-    var role = DEMO ? 'Антон' : ({admin: 'Администратор', manager: 'Менеджер', jury: 'Жюри'})[store.role];
-    profile.hidden = !role;
-    $('.user__name', profile).textContent = role || '';
-    $('.user__role', profile).textContent = DEMO ? 'Менеджер Store, до 18:00' : '';
-    $('.avatar', profile).textContent = role ? role.charAt(0) : '';
+    var s = store.settings || {}, jury = store.role === 'jury', loggedIn = DEMO || !!store.role;
+    var name = jury ? 'Жюри' : (store.user_name || 'Антон');
+    var line = jury ? '' : (store.role === 'admin' ? 'Администратор' : 'Менеджер') + ' Store' + (s.to ? ', до ' + s.to : '');
+    profile.hidden = !loggedIn;
+    $('.user__name', profile).textContent = loggedIn ? name : '';
+    $('.user__role', profile).textContent = loggedIn ? line : '';
+    $('.avatar', profile).textContent = loggedIn ? name.charAt(0) : '';
     var n = queue().length, c = $('#todayCounter');
     c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
     var st = status().state, h;
     if (!DEMO) {
-      h = !role ? '' : st === 'limit'
+      h = !loggedIn ? '' : st === 'limit'
         ? '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '</div>'
         : '<div class="status status--plain">' + badge('success', 'Агент работает') + '</div>';
     }
@@ -221,7 +224,7 @@
     else h = '<div class="status"><span>Агент работает</span><button class="switch switch--agent" type="button" role="switch" aria-checked="true" aria-label="Поставить агента на паузу" data-act="pause"></button></div>';
     $('#agentStatus').innerHTML = h;
     var note = store.role === 'jury' ? 'Доступ жюри · учебные обращения, только просмотр' : '';
-    var el = $('#notice'); el.hidden = !note; el.innerHTML = note ? badge('danger', note) : '';
+    var el = $('#notice'); el.hidden = !note; el.innerHTML = note ? badge('neutral', note) : '';
   }
 
   function viewMetrics(data) {
@@ -306,8 +309,7 @@
       (price != null && !inChat ? '<span class="num" id="price-' + id + '">' + money(price) + '</span>' : '') + '</div>';
     h += '<div class="case__intro"><div class="case__about"><h2 class="h2">' + t(c.title) + '</h2>' +
       (c.first ? '<p class="bubble" title="' + esc(c.first) + '"><span>' + t(c.first) + '</span></p>' : '') +
-      (c.summary ? '<p class="effect">' + t(c.summary) + '</p>' : '') +
-      (c.reason_text ? '<p class="muted">' + t(c.reason_text) + '</p>' : '') + '</div>' + stepsHtml(c) + '</div>';
+      (c.summary_facts && c.summary_facts.length && c.kind !== 'quote' ? facts(c.summary_facts) : '') + '</div>' + stepsHtml(c) + '</div>';
 
     if (store.role === 'jury') return h + (c.kp ? '<hr class="dash">' + kpHtml(c, false) : '') + '</section>';
 
@@ -332,7 +334,7 @@
       var d = draft(c);
       h += '<hr class="dash"><div class="reply"><label class="label"><span class="label__text medium">Ответ для клиента</span>' +
         '<textarea class="field" rows="2" data-draft="reply" data-id="' + id + '" placeholder="Что ответить клиенту">' + esc(d.reply) + '</textarea></label>' +
-        (c.help_option ? '<label class="check"><button class="switch" type="button" role="switch" aria-checked="' + (DEMO ? d.help !== false : d.help === true) + '" data-act="help" data-id="' + id + '" aria-label="Добавить ответ в справку"></button>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' : '') + '</div>';
+        (c.help_option ? '<label class="check"><button class="switch" type="button" role="switch" aria-checked="' + (d.help !== false) + '" data-act="help" data-id="' + id + '" aria-label="Добавить ответ в справку"></button>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' : '') + '</div>';
       h += '<p class="effect">' + rich(c.effect) + '</p><div class="case__buttons"><button class="btn btn--accent' + (ui.busy[c.id] ? ' is-busy' : '') + '" type="button" data-act="answer" data-id="' + id + '" data-needs="reply"' + (String(d.reply || '').trim() ? '' : ' disabled') + '>' + (ui.busy[c.id] ? 'Отправляю…' : 'Ответить клиенту') + '</button></div>';
       return h + '</section>';
     }
@@ -517,7 +519,9 @@
     }
     var groups = jGroups(shown, day), dk = day.toDateString(), filtered = !!(q || ui.jFilter);
     var left = '<section class="panel panel--fit" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
-      '<button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button></div>' +
+      '<div class="jhead-actions"><button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button>' +
+      (DEMO || store.role === 'jury' ? '' : '<button class="icon-btn" type="button" data-act="export-csv" title="Скачать журнал за день" aria-label="Скачать журнал за день">' + IC.download + '</button>') +
+      '</div></div>' +
       '<div class="chips"><button class="chip' + (ui.jFilter === 'open' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="open" aria-pressed="' + (ui.jFilter === 'open') + '">Не закрыты' + counter(open, true) + '</button>' +
       '<button class="chip' + (ui.jFilter === 'review' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="review" aria-pressed="' + (ui.jFilter === 'review') + '">Проверить' + counter(review, !review) + '</button></div>' +
       '<label class="search">' + IC.search + '<input class="field" type="search" data-act="jsearch" placeholder="Клиент, ИНН или № заказа" aria-label="Поиск по журналу" value="' + esc(ui.jQuery) + '"></label>' +
@@ -554,11 +558,12 @@
     var match = function (x) { return !q || (x.title + ' ' + (x.meta || '') + ' ' + (x.text || '')).toLowerCase().indexOf(q) >= 0; };
     var rules = (k.rules || []).filter(match), arts = (k.articles || []).filter(match);
     var shownArts = ui.kAll || q ? arts : arts.slice(0, 5);
-    var left = '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2><div class="groups">' +
-      kGroup('pending', 'Ответы для справки', pending.length, pending.length ? pending.map(function (p) { return plate('kpending', p); }).join('') : '<p class="nothing">Новых ответов нет</p>', pending.length > 0) +
-      kGroup('gaps', 'Темы без ответа', gaps.length, gaps.length ? gaps.map(function (g) { return plate('kgap', g, g.share); }).join('') : '<p class="nothing">Тем без ответа нет</p>', gaps.length > 0) +
-      kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.length ? fixes.map(function (f) { return plate('kfix', f); }).join('') : '<p class="nothing">Поправок нет</p>', fixes.length > 0) +
-      '</div></section>';
+    var left = '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
+      (pending.length + gaps.length + fixes.length ? '<div class="groups">' +
+        (pending.length ? kGroup('pending', 'Ответы для справки', pending.length, pending.map(function (p) { return plate('kpending', p); }).join('')) : '') +
+        (gaps.length ? kGroup('gaps', 'Темы без ответа', gaps.length, gaps.map(function (g) { return plate('kgap', g, g.share); }).join('')) : '') +
+        (fixes.length ? kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.map(function (f) { return plate('kfix', f); }).join('')) : '') + '</div>'
+        : '<p class="nothing">' + t('Всё разобрано: новых ответов, тем и поправок нет') + '</p>') + '</section>';
     var right = '<section class="panel" aria-label="Что знает агент"><h2 class="h2">Что знает агент</h2>' +
       '<label class="search">' + IC.search + '<input class="field" type="search" data-act="ksearch" placeholder="Правило, статья или слово" aria-label="Поиск по знаниям агента" value="' + esc(ui.kQuery) + '"></label><div class="groups">' +
       kGroup('rules', 'Правила агента', rules.length, rules.length ? rules.map(function (r) { return plate('krule', r); }).join('') : '<p class="nothing">Правил не нашлось</p>') +
@@ -658,7 +663,24 @@
   }
 
   function viewSettings() {
-    var s = store.settings || {}, ro = !!s.readonly || store.role === 'jury', dis = ro ? ' disabled' : '';
+    var s = store.settings || {}, jury = store.role === 'jury', ro = !!s.readonly || jury, dis = ro ? ' disabled' : '';
+    if (jury) {
+      var curModel = byId(s.models || [], s.model) || (s.models || [])[0] || { name: 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' };
+      var curChan = byId(s.channels || [], s.channel);
+      return '<div class="settings-cols">' +
+        '<section class="panel"><h2 class="h2">Лимит на работу агента</h2>' +
+        facts([['Лимит в месяц', money(s.limit_rub || 0)], ['Предупредить при', money(s.warn_rub || 0)]]) +
+        '<p>' + rich('Когда лимит потрачен, агент **молчит до 1-го числа**, чаты идут менеджерам.') + '</p></section>' +
+        '<section class="panel"><h2 class="h2">Срок ответа и часы менеджеров</h2>' +
+        facts([['Ответ менеджера обещаем через', (s.answer_min || 2) + ' мин'], ['Часы менеджеров, по Москве', (s.days || 'Пн–пт') + ', ' + (s.from || '9:00') + '–' + (s.to || '18:00')]]) +
+        '<p>' + rich('Этот срок агент **называет клиенту**, когда передаёт вопрос менеджеру.\nВечером и в выходные обещает ответ **до ' + hmOf(mins(s.from || '9:00') + 60) + ' рабочего дня**.') + '</p></section>' +
+        '<section class="panel"><h2 class="h2">Уведомления менеджерам</h2>' +
+        facts([['Статус', s.notify ? 'включены' : 'выключены'], ['Канал', s.notify && curChan ? curChan.name : 'только в кабинете']]) +
+        '<p>' + rich(s.notify ? 'Уведомления **бесплатные** и лимит не тратят.' : 'О новых разговорах менеджеры узнают **только в кабинете**.') + '</p></section>' +
+        '<section class="panel"><h2 class="h2">Модель</h2>' +
+        facts([['Текущая модель', curModel.name], ['Ориентир расходов', curModel.cost]]) +
+        '<p class="panel__note">' + t(s.model_note || '') + '</p></section></div>';
+    }
     var warnBad = s.warn_rub >= s.limit_rub;
     var limit = '<section class="panel"><h2 class="h2">Лимит на работу агента</h2><div class="fields">' +
       '<label class="label"><span class="label__text">Лимит в месяц, ₽</span><input class="field" inputmode="numeric" data-set="limit_rub" value="' + esc(group3(s.limit_rub)) + '"' + dis + '></label>' +
@@ -915,7 +937,7 @@
       case 'edit-kp': ui.kpEdit[id] = true; ui.discount[id] = (c.kp && c.kp.discount) || 0; render().then(function () { var f = $('#disc-' + id); if (f) { f.focus(); f.select(); } }); return;
       case 'cancel-edit': ui.kpEdit[id] = false; ui.discount[id] = 0; render(); return;
       case 'send-kp': return sendKp(c, b);
-      case 'export-csv': window.SupportBackend.downloadCases().catch(function () { toast('Не удалось выгрузить журнал'); }); return;
+      case 'export-csv': window.SupportBackend.downloadCases(ui.jDay).catch(function () { toast('Не удалось выгрузить журнал'); }); return;
       case 'help': var dh = draft(c); dh.help = b.getAttribute('aria-checked') !== 'true'; b.setAttribute('aria-checked', dh.help); return;
       case 'answer': return answer(c, b);
       case 'return': return giveBack(c, b);
@@ -947,7 +969,8 @@
       /* профиль */
       case 'profile':
         if (pop && pop.anchor === b) { closePop(); return; }
-        openPop(b, '<div class="menu__head"><span class="medium">' + t($('.user__name', b).textContent) + '</span></div><div class="menu__sep"></div>' + menu([{ label: 'Выйти', act: 'logout' }]), { width: b.offsetWidth, align: 'right' });
+        var roleLine = $('.user__role', b).textContent;
+        openPop(b, '<div class="menu__head"><span class="medium">' + t($('.user__name', b).textContent) + '</span>' + (roleLine ? '<span class="muted">' + t(roleLine) + '</span>' : '') + '</div><div class="menu__sep"></div>' + menu([{ label: 'Выйти', act: 'logout' }]), { width: Math.max(b.offsetWidth, 210), align: 'right' });
         return;
       case 'logout':
         closePop(true);
@@ -1038,7 +1061,7 @@
     }, function () { delete ui.busy[c.id]; render(); });
   }
   function answer(c) {
-    var d = draft(c), text = String(d.reply || '').trim(), help = c.help_option && (DEMO ? d.help !== false : d.help === true);
+    var d = draft(c), text = String(d.reply || '').trim(), help = c.help_option && d.help !== false;
     if (!text) return;
     ui.busy[c.id] = true; render();
     act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/decision', { action: 'answer', reply_text: text, add_to_help: help }, function (res) {

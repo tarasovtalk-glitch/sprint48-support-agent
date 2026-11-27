@@ -628,6 +628,7 @@
     }
     function send(text, buttonId) {
       text = String(text || '').trim(); if (!text || busy || closed) return false;
+      var bubble = me(text);
       busy++; typing(true);
       var data = { text: text }; if (buttonId) data.button_id = buttonId;
       (sid ? Promise.resolve() : open()).then(function () {
@@ -635,8 +636,9 @@
       }).then(function (r) {
         busy--; typing(false);
         [].forEach.call(body.querySelectorAll('.slc-pills'), function (x) { x.remove(); });
-        me(text); show(r.messages);
+        show(r.messages);
       }, function (error) {
+        if (bubble) bubble.remove();
         busy--; fail(error);
         if (!buttonId && error && error.status === 429) {
           if (!input.value.trim()) {

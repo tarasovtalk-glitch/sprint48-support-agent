@@ -134,16 +134,52 @@
     return s.length > 36 ? s.slice(0, 35).replace(/\s+\S*$/, '') + '…' : s;
   }
 
-  // почему агент позвал менеджера: заголовок карточки и одна фраза о причине
+  // почему агент позвал менеджера: заголовок карточки и одна фраза о причине (все 19 причин из summary.py)
   var REASON = {
+    quote_review: { title: 'Черновик КП на проверку', why: 'Агент собрал черновик КП по каталогу, нужна проверка перед отправкой.' },
+    quote_multi: { title: 'Черновик КП на проверку', why: 'Агент собрал черновик КП на несколько позиций, нужна проверка.' },
     discount_over_limit: { title: 'Клиент просит скидку больше 5%', why: 'Агент может дать только купон 5%, клиент просит больше.' },
-    customer_request: { title: 'Клиент просит менеджера', why: 'Клиент попросил живого человека или пишет о тендере.' },
+    customer_request: { title: 'Клиент просит менеджера', why: 'Клиент попросил подключить живого менеджера.' },
     server_license: { title: 'Лицензия на сервер', why: 'Цену серверной лицензии агент не называет.' },
-    price_confirmation: { title: 'Уточнить цену', why: 'В каталоге нет цены или позиция недоступна.' },
-    catalog_unavailable: { title: 'Позиции нет в каталоге', why: 'Агент не нашёл позицию, клиенту нужна замена.' }
+    price_confirmation: { title: 'Сверить цену и количество', why: 'В каталоге нет подтверждённой цены или нужно сверить комплектацию.' },
+    catalog_unavailable: { title: 'Каталог недоступен', why: 'Агент не смог проверить позицию в каталоге.' },
+    not_in_catalog: { title: 'Товара нет в каталоге', why: 'Агент не нашёл позицию в каталоге, нужна проверка или замена.' },
+    order_question: { title: 'Вопрос по заказу', why: 'У агента нет доступа к заказам, нужен менеджер.' },
+    activation_problem: { title: 'Не активируется ключ', why: 'Клиент сообщил о проблеме с активацией ключа.' },
+    tender: { title: 'Тендер или госзакупка', why: 'Условия для тендера или госзакупки готовит менеджер.' },
+    request_status: { title: 'Статус заявки', why: 'Клиент уточняет статус ранее отправленного запроса.' },
+    payment_question: { title: 'Вопрос оплаты', why: 'Нетиповой вопрос по условиям оплаты, нужен менеджер.' },
+    needs_manager: { title: 'Нужен менеджер', why: 'Агент передал нестандартный запрос менеджеру.' },
+    deferral: { title: 'Просит отсрочку', why: 'Отсрочку и постоплату агент не обещает, исключения решает менеджер.' },
+    model_routing: { title: 'Не распознан запрос', why: 'Агент не уверен в ответе и передал разговор человеку.' },
+    complaint: { title: 'Жалоба клиента', why: 'Клиент недоволен обслуживанием, требуется участие менеджера.' },
+    closing_documents: { title: 'Закрывающие документы', why: 'Клиенту нужны закрывающие документы по заказу.' },
+    analog_request: { title: 'Нужен аналог', why: 'Клиенту нужен подбор аналога, которого нет в прямой выдаче.' },
+    exact_product_request: { title: 'Нужен именно этот товар', why: 'Клиент настаивает на конкретной позиции, которой нет в каталоге.' }
   };
   // группа в очереди «Ждут решения»: что решить менеджеру, коротко
-  var GROUP = { discount_over_limit: 'Скидка больше 5%', customer_request: 'Просят менеджера', server_license: 'Лицензия на сервер', price_confirmation: 'Уточнить цену', catalog_unavailable: 'Нет в каталоге' };
+  var GROUP = {
+    quote_review: 'КП на отправку',
+    quote_multi: 'КП на отправку',
+    discount_over_limit: 'Скидка больше 5%',
+    customer_request: 'Просят менеджера',
+    needs_manager: 'Просят менеджера',
+    server_license: 'Лицензия на сервер',
+    price_confirmation: 'Уточнить цену',
+    not_in_catalog: 'Нет в каталоге',
+    catalog_unavailable: 'Нет в каталоге',
+    exact_product_request: 'Нет в каталоге',
+    analog_request: 'Нужен аналог',
+    tender: 'Тендер и госзакупка',
+    order_question: 'Вопросы по заказам',
+    request_status: 'Вопросы по заказам',
+    closing_documents: 'Вопросы по заказам',
+    activation_problem: 'Активация и ключи',
+    payment_question: 'Оплата и отсрочка',
+    deferral: 'Оплата и отсрочка',
+    complaint: 'Жалобы',
+    model_routing: 'Другие запросы'
+  };
   var ANSWER_EFFECT = 'Ответ уйдёт клиенту в этот же чат **от имени менеджера**, обращение закроется.';
   // срок ответа: агент обещает клиенту ответ менеджера через 2 минуты после последней реплики
   var ANSWER_MIN = 2;
@@ -153,13 +189,14 @@
 
   // случай сервера {id, version, state, reason, quote, created, updated, first_client_message} → карточка кабинета
   function toCase(v) {
-    var q = v.quote, why = REASON[v.reason] || { title: 'Запрос клиента', why: 'Агент передал разговор менеджеру.' };
+    var q = v.quote;
+    var why = REASON[v.reason] || { title: v.reason_text || 'Запрос клиента', why: 'Агент передал разговор менеджеру.' };
     var who = q && q.customer ? q.customer : 'Посетитель сайта';
     var at = utc(v.updated || v.created);
     var c = {
       id: v.id, version: v.version, reason: v.reason, status: v.state === 'pending' ? 'waiting' : 'done',
       client: who, initials: initials(who), first: v.first_client_message || '',
-      summary: v.summary || '', reason_text: v.reason_text || '',
+      summary_facts: Array.isArray(v.summary_facts) ? v.summary_facts : [],
       deadline: at && !isNaN(Date.parse(at)) ? new Date(Date.parse(at) + ANSWER_MIN * 60000).toISOString() : null,
       steps: null, talk: null, talk_earlier: [], help_option: false, can_discount: false
     };
@@ -181,7 +218,7 @@
       };
       c.effect = 'После отправки клиент получит в этот же чат **КП файлом PDF**.';
     } else {
-      c.kind = 'answer'; c.deadline_label = 'Ответ до'; c.group = GROUP[v.reason] || 'Другие запросы';
+      c.kind = 'answer'; c.deadline_label = 'Ответ до'; c.group = GROUP[v.reason] || v.reason_text || 'Другие запросы';
       c.queue_title = c.title = why.title;
       c.facts = [['Клиент', who]];
       c.reply_draft = '';
@@ -290,8 +327,8 @@
   }
   function toTalk(messages) {
     return (messages || []).map(function (m) {
-      var who = m.role === 'client' ? 'client' : m.role === 'manager' ? 'manager' : 'agent';
-      return { who: who, name: who === 'manager' ? 'Менеджер' : undefined, text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : '') };
+      var who = m.role === 'client' ? 'client' : m.role === 'manager' ? 'me' : 'agent';
+      return { who: who, name: who === 'me' ? 'Антон' : undefined, text: (m.text || '') + (m.document_url ? ' Файл: ' + FILE_NAME : '') };
     });
   }
   function events(id) {
@@ -439,7 +476,7 @@
         { title: 'Черновик КП на проверку', count: 0 },
         { title: 'Сверить цену и количество', count: 0 },
         { title: 'Клиент просит менеджера', count: 0 },
-        { title: 'Скидка больше 5 %', count: 0 }
+        { title: 'Скидка больше 5%', count: 0 }
       ];
       var reasonsTotal = reasons.reduce(function (sum, x) { return sum + (x.count || 0); }, 0) || 1;
       var prevMonth = MONTH_CAP[(monthIdx + 11) % 12];
@@ -509,15 +546,15 @@
         channel: 'telegram',
         channels: [
           { id: 'telegram', name: 'Telegram', note: 'бот магазина' },
-          { id: 'max', name: 'MAX', note: 'нужна подтверждённая организация', off: true }
+          { id: 'max', name: 'MAX', note: 'нужна проверка компании', off: true }
         ],
         model: 'alice',
         models: [
-          { id: 'alice', name: m.model_name || 'Alice AI LLM Flash', cost: '≈0,11 ₽ / 1 000 токенов' },
+          { id: 'alice', name: m.model_name || 'Alice AI LLM Flash', cost: 'до 113 ₽ в месяц' },
           { id: 'deepseek', name: 'DeepSeek V4.1 Flash', cost: '≈300 ₽ в месяц' },
           { id: 'yandexgpt', name: 'YandexGPT Pro 5.1', cost: '≈850 ₽ в месяц' }
         ],
-        model_note: 'Настройки заданы в конфигурации стенда (только просмотр).'
+        model_note: 'Цена при 1 500 обращениях в месяц, по замеру на стенде.'
       };
     });
   }
@@ -545,12 +582,20 @@
     return Promise.reject(fail(404));
   }
 
-  function downloadCases() {
-    return fetch(API + '/manager/cases/export.csv', { credentials: 'same-origin', headers: managerHeaders() })
+  function downloadCases(day) {
+    var qs = '', filename = 'Журнал обращений.csv';
+    if (day && !isNaN(day.getTime())) {
+      var iso = day.getFullYear() + '-' + two(day.getMonth() + 1) + '-' + two(day.getDate());
+      var ru = two(day.getDate()) + '.' + two(day.getMonth() + 1) + '.' + day.getFullYear();
+      var tz = -day.getTimezoneOffset();
+      qs = '?day=' + encodeURIComponent(iso) + '&tz_offset=' + encodeURIComponent(String(tz));
+      filename = 'Журнал обращений, ' + ru + '.csv';
+    }
+    return fetch(API + '/manager/cases/export.csv' + qs, { credentials: 'same-origin', headers: managerHeaders() })
       .then(function (r) { if (!r.ok) throw fail(r.status); return r.blob(); })
       .then(function (blob) {
         var url = URL.createObjectURL(blob), a = document.createElement('a');
-        a.href = url; a.download = 'cases.csv'; a.click();
+        a.href = url; a.download = filename; a.click();
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
       });
   }
