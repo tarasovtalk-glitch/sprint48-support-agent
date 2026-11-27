@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .dialog import (
-    CORRECTION, catalog_turn, digits, is_closing, multi_quote, quantity, support_topic, units_for,
+    CORRECTION, RENEWAL, catalog_turn, digits, is_closing, multi_quote, price_line, quantity, support_topic, term, units_for,
 )
 from .catalog import discounted, find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
@@ -39,7 +39,13 @@ MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
 WINDOWS_PRO = re.compile(r'\bwindows\s+11\s+pro\b')
+WINDOWS_10_PRO = re.compile(r'\b(?:windows|виндовс)\s+10\s+pro\b')
+WINDOWS_11_FOLLOWUP = re.compile(r'\b11\s+pro\b')
 OFFICE_HOME = re.compile(r'\b(?:дома|для дома|домашн\w*)\b.{0,40}\b(?:office|офис)\b|\b(?:office|офис)\b.{0,40}\bдля дома\b')
+OFFICE_2021 = re.compile(r'\b(?:office|офис)\s+2021\b')
+HOME_AND_BUSINESS = re.compile(r'\bдля\s+дома\s+и\s+бизнес\w*\b')
+KASPERSKY_TOTAL = re.compile(r'\b(?:kaspersky|касперск\w*)\s+(?:total\s+security|тотал\s+секьюрити)\b')
+MDAEMON_MESSAGING = re.compile(r'\bmessaging\s+server\b')
 EDUCATIONAL_PRICE = re.compile(r'школ|учебн|образовательн')
 VIPNET_NAME = re.compile(r'vipnet|випнет')
 CSP_COMPARISON = (
@@ -323,6 +329,21 @@ def queue_quote(db, row, state, catalog: Path):
             f'Сумма по каталогу проверена. {message}'), []
 
 
+def offer_price(state: dict, offer: dict | None, intro: str = ''):
+    if not offer or not offer['available'] or not offer['price_kopecks']:
+        return None
+    qty = state.get('quantity')
+    units = units_for(offer, qty)
+    if units is None:
+        return None
+    state.update(flow=None, g_family=offer['family'], offer_id=offer['id'], offered_ids=[offer['id']])
+    for key in ('price_topic', 'g_missing', 'g_items', 'needs_quote_items'):
+        state.pop(key, None)
+    state['awaiting_customer'] = bool(qty)
+    tail = QUOTE_CUSTOMER_PROMPT if qty else 'На сколько лицензий посчитать?'
+    return f'{intro}{price_line(offer, qty, units=units)}. {tail}', [('Подготовить КП', 'quote', '')]
+
+
 def coupon(state) -> int:
     """Купон, который бот уже предложил в этом диалоге (не больше 5 %): он же попадает в КП."""
     try:
@@ -553,6 +574,48 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if WINDOWS_10_PRO.search(query) and catalog.is_file():
+        with closing(read_only(catalog)) as cat:
+            offers = find_matches(cat, ['windows', '10', 'pro'], None, None, active_only=True, new_purchase_only=True)
+        if not any(WINDOWS_10_PRO.search(normalize(offer['name'])) for offer in offers):
+            state['price_topic'] = 'windows_10_pro'
+            return 'Подтверждённой цены на Windows 10 Pro в каталоге нет. Подойдёт Windows 11 Pro?', []
+    if state.get('price_topic') == 'windows_10_pro' and WINDOWS_11_FOLLOWUP.search(query):
+        reply = offer_price(state, lookup(catalog, '380385'))
+        return reply or ('Цену Windows 11 Pro для этого заказа уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
+    if OFFICE_2021.search(query) and catalog.is_file():
+        with closing(read_only(catalog)) as cat:
+            offers = find_matches(cat, ['office', '2021'], None, None, active_only=True, new_purchase_only=True)
+        if not any(OFFICE_2021.search(normalize(offer['name'])) for offer in offers):
+            state['price_topic'] = 'office_2021'
+            if not HOME_AND_BUSINESS.search(query):
+                return 'В каталоге нет подтверждённой цены на Office 2021. Какая редакция нужна: для дома и бизнеса, домашняя или другая?', []
+    if state.get('price_topic') == 'office_2021' and HOME_AND_BUSINESS.search(query):
+        reply = offer_price(state, lookup(catalog, '473582'), 'Ближайшая доступная редакция — Office для дома и бизнеса 2024. ')
+        return reply or ('Доступную редакцию Office уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
+    if KASPERSKY_TOTAL.search(query) and not re.search(r'для\s+бизнес|организац|enterprise', query):
+        state['price_topic'] = 'kaspersky_total'
+        if 'для дома' not in query:
+            return 'Подбираете защиту для дома или для организации? У них разные лицензии Kaspersky.', []
+    if state.get('price_topic') == 'kaspersky_total' and 'для дома' in query:
+        pack = {3: '416858', 5: '416859'}.get(state.get('quantity'))
+        if pack and term(text) == 12 and re.search(r'нов\w*\s+лиценз', query):
+            reply = offer_price(state, lookup(catalog, pack), 'Для дома могу предложить годовой пакет Kaspersky Standard. ')
+            if reply:
+                return reply
+        return 'Домашнюю редакцию и условия лицензии Kaspersky уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), []
+    if ((MDAEMON_MESSAGING.search(query) or MDAEMON_NAME.search(query) or state.get('flow') == 'mdaemon')
+            and RENEWAL.search(query) and catalog.is_file()):
+        qty, months = state.get('quantity'), term(text) or state.get('term')
+        if qty and months:
+            with closing(read_only(catalog)) as cat:
+                matches = find_matches(cat, ['mdaemon', 'messaging', 'server'], qty, months, active_only=True)
+            expired = 'просроч' in query
+            eligible = (offer for offer in matches if not offer['new_purchase'] and offer['max_users'] == qty
+                        and offer['term_months'] == months and MDAEMON_MESSAGING.search(normalize(offer['name']))
+                        and RENEWAL.search(normalize(offer['name'])) and ('просроч' in normalize(offer['name'])) == expired)
+            reply = offer_price(state, min(eligible, key=lambda offer: offer['price_kopecks'], default=None))
+            return reply or ('Условия продления MDaemon Messaging Server уточнит менеджер. ' + enter_queue(db, row, state, 'price_confirmation'), [])
     if re.search(r'\b(?:windows|виндовс)\b.{0,20}(?:для\s+дома|домашн)', query) and not re.search(r'\b(?:pro|server)\b', query):
         offer = lookup(catalog, '380389')
         if offer and offer['available'] and offer['price_kopecks']:
