@@ -3,105 +3,97 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex, nofollow">
-  <title>Softline Store — витрина и чат с помощником</title>
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>Softline Store — демоверсия с ИИ-помощником</title>
   <link rel="icon" href="../favicon/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="../chat/chat.css">
-  <style>
-    :root { color-scheme: light; --ink: #1f2024; --accent: #a30839; --muted: #585d69; --line: #e1e3ea; --paper: #fff; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f6f7fa; color: var(--ink); font: 16px/1.5 "SLChatInter", system-ui, sans-serif; }
-    .store-bar { border-bottom: 1px solid var(--line); background: var(--paper); }
-    .store-wrap { max-width: 1440px; margin: auto; padding-inline: clamp(16px, 4vw, 60px); }
-    .store-nav { min-height: 72px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; padding-block: 10px; }
-    .store-name { color: var(--accent); font-size: 22px; font-weight: 700; letter-spacing: -.03em; }
-    .store-nav nav { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 14px; }
-    .store-nav a, .product a { color: inherit; text-underline-offset: 4px; }
-    .store-nav a:hover, .product a:hover { color: var(--accent); }
-    .store-main { padding-block: clamp(32px, 5vw, 72px) 90px; }
-    .store-top { max-width: 630px; }
-    h1 { margin: 0; font-size: clamp(32px, 4vw, 54px); line-height: 1.08; letter-spacing: -.045em; }
-    .store-top p { margin: 14px 0 20px; color: var(--muted); }
-    .store-action { padding: 10px 14px; border: 1px solid transparent; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font: 600 14px/1.45 "SLChatInter", system-ui, sans-serif; }
-    .store-action:hover { background: #83072e; }
-    .store-main :focus-visible, .store-nav :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    .catalog { margin-top: 40px; }
-    .catalog h2 { margin: 0 0 14px; font-size: 22px; letter-spacing: -.025em; }
-    .product-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
-    .product { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
-    .product small { color: var(--muted); font-size: 12px; }
-    .product h3 { margin: 4px 0 0; font-size: 17px; line-height: 1.3; }
-    .product p { margin: 8px 0 16px; color: var(--muted); font-size: 14px; }
-    .product .store-action { margin-top: auto; background: var(--paper); color: var(--accent); border-color: var(--line); }
-    .product .store-action:hover { border-color: var(--accent); background: #fff5f8; }
-    .slc-feedback { display: none; }
-    @media (min-width: 940px) {
-      body:has(#sl-chat.is-open) .store-main { padding-right: calc(404px + clamp(16px, 4vw, 60px)); }
-    }
-    @media (max-width: 600px) {
-      #sl-chat .slc-panel { right: 12px; bottom: 12px; width: min(380px, calc(100vw - 24px)); height: min(680px, calc(100dvh - 24px)); }
-    }
-  </style>
+  <link rel="stylesheet" href="store.css">
 </head>
 <body>
-  <header class="store-bar">
-    <div class="store-wrap store-nav">
-      <strong class="store-name">Softline Store</strong>
-      <nav aria-label="Навигация витрины">
-        <a href="https://store.softline.ru/" target="_blank" rel="noopener noreferrer">Полный каталог Softline</a>
-        <a href="../">Вернуться на стенд</a>
-      </nav>
+  <p class="demo-label">Демо-версия · демонстрация возможностей ИИ-помощника</p>
+  <header class="store-header">
+    <div class="wrap header-main">
+      <a class="brand" href="./" aria-label="Демоверсия Softline Store">Softline <span>Store</span></a>
+      <a href="#catalog" class="catalog-link">Каталог</a>
+      <form class="product-search" aria-label="Поиск по каталогу">
+        <input type="search" name="product" aria-label="Название продукта" placeholder="Найдите программу или лицензию" required maxlength="100">
+        <button type="submit">Найти</button>
+      </form>
+      <button type="button" class="help-link" data-open-chat>Поддержка</button>
     </div>
+    <nav class="wrap categories" aria-label="Разделы каталога">
+      <a href="#crypto">Криптография</a>
+      <a href="#office">Офисное ПО</a>
+      <a href="#windows">Операционные системы</a>
+      <a href="#kaspersky">Антивирусы</a>
+      <a class="official" href="https://store.softline.ru/" target="_blank" rel="noopener noreferrer">Официальный магазин ↗</a>
+    </nav>
   </header>
-  <main class="store-wrap store-main">
-    <div class="store-top">
-      <h1>Лицензии и программное обеспечение</h1>
-      <p>Витрина демостенда Softline Store. Помощник сверит цену по каталогу, подберёт лицензию и подготовит КП.</p>
-      <button type="button" class="store-action" data-open-chat>Написать помощнику</button>
-    </div>
-    <section class="catalog" aria-labelledby="catalog-heading">
-      <h2 id="catalog-heading">Из каталога</h2>
+
+  <main class="wrap store-main">
+    <section class="featured" aria-label="Предложения магазина">
+      <article class="hero">
+        <div>
+          <p class="hero-category">Электронная подпись</p>
+          <h1>КриптоПро CSP 5.0</h1>
+          <p class="hero-description">Бессрочная лицензия на рабочее место. Помощник рассчитает стоимость по количеству и подготовит КП.</p>
+          <button type="button" class="primary" data-open-chat="Нужно КП на 19 бессрочных лицензий КриптоПро CSP 5.0">Рассчитать в чате</button>
+        </div>
+        <img class="hero-image" src="products/cryptopro.png" alt="" width="168" height="168">
+      </article>
+      <article class="service">
+        <p>Поддержка магазина</p>
+        <h2>Помощь с подбором&nbsp;ПО</h2>
+        <p>Уточните условия лицензии, запросите КП или задайте вопрос по заказу.</p>
+        <button type="button" class="service-action" data-open-chat>Написать помощнику</button>
+      </article>
+    </section>
+
+    <section id="catalog" class="catalog" aria-labelledby="catalog-title">
+      <div class="catalog-heading">
+        <h2 id="catalog-title">Популярное ПО</h2>
+        <a href="https://store.softline.ru/catalog/" target="_blank" rel="noopener noreferrer">Весь каталог ↗</a>
+      </div>
       <ul class="product-list">
-        <li class="product">
-          <small>Электронная подпись</small>
+        <li id="crypto" class="product">
+          <div class="product-image"><img src="products/cryptopro.png" alt="" width="168" height="168"></div>
+          <p class="product-type">Электронная подпись</p>
           <h3><a href="https://store.softline.ru/kripto-pro/-410137/" target="_blank" rel="noopener noreferrer">КриптоПро CSP 5.0</a></h3>
-          <p>Бессрочная лицензия на одно рабочее место</p>
-          <button type="button" class="store-action" data-open-chat="Сколько стоит бессрочная лицензия КриптоПро CSP 5.0 на одно рабочее место?" aria-label="Узнать цену КриптоПро CSP в чате">Узнать цену в чате</button>
+          <p class="product-details">Бессрочная лицензия на рабочее место</p>
+          <strong class="price">3 700 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит бессрочная лицензия КриптоПро CSP 5.0 на одно рабочее место?" aria-label="КриптоПро CSP: уточнить в чате">Уточнить в чате</button>
         </li>
-        <li class="product">
-          <small>Офисный пакет</small>
+        <li id="office" class="product">
+          <div class="product-image"><img src="products/office.jpg" alt="" width="168" height="168"></div>
+          <p class="product-type">Офисное ПО</p>
           <h3><a href="https://store.softline.ru/microsoft/ep2-06605-473582/" target="_blank" rel="noopener noreferrer">Microsoft Office 2024</a></h3>
-          <p>Для дома и бизнеса, бессрочная лицензия на один ПК</p>
-          <button type="button" class="store-action" data-open-chat="Сколько стоит Microsoft Office 2024 для дома и бизнеса на один ПК?" aria-label="Узнать цену Microsoft Office в чате">Узнать цену в чате</button>
+          <p class="product-details">Для дома и бизнеса, лицензия на один ПК</p>
+          <strong class="price">36 657 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит Microsoft Office 2024 для дома и бизнеса на один ПК?" aria-label="Microsoft Office: уточнить в чате">Уточнить в чате</button>
         </li>
-        <li class="product">
-          <small>Операционная система</small>
-          <h3><a href="https://store.softline.ru/microsoft/fqc-10572-380385/" target="_blank" rel="noopener noreferrer">Windows 11 Pro</a></h3>
-          <p>Электронный ключ Microsoft, артикул FQC-10572</p>
-          <button type="button" class="store-action" data-open-chat="Сколько стоит Windows 11 Pro FQC-10572 на один компьютер?" aria-label="Узнать цену Windows 11 Pro в чате">Узнать цену в чате</button>
+        <li id="windows" class="product">
+          <div class="product-image"><img src="products/windows.jpg" alt="" width="168" height="168"></div>
+          <p class="product-type">Операционные системы</p>
+          <h3><a href="https://store.softline.ru/microsoft/fqc-10572-380385/" target="_blank" rel="noopener noreferrer">Microsoft Windows 11 Pro</a></h3>
+          <p class="product-details">Электронный ключ, FQC-10572</p>
+          <strong class="price">30 508 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит Windows 11 Pro FQC-10572 на один компьютер?" aria-label="Windows 11 Pro: уточнить в чате">Уточнить в чате</button>
+        </li>
+        <li id="kaspersky" class="product">
+          <div class="product-image"><img src="products/kaspersky.png" alt="" width="168" height="168"></div>
+          <p class="product-type">Антивирусы</p>
+          <h3><a href="https://store.softline.ru/kaspersky/kl1041rdcfs-416858/" target="_blank" rel="noopener noreferrer">Kaspersky Standard</a></h3>
+          <p class="product-details">Годовая лицензия на три устройства</p>
+          <strong class="price">2 749 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Нужна новая годовая лицензия Kaspersky Standard на 3 устройства для дома" aria-label="Kaspersky Standard: уточнить в чате">Уточнить в чате</button>
         </li>
       </ul>
+      <p class="catalog-note">Цены по выгрузке Softline Store от 27 ноября 2026 года.</p>
     </section>
   </main>
   <script src="../config.js"></script>
   <script src="../api.js"></script>
   <script src="../chat/chat.js"></script>
-  <script>
-    const chat = document.querySelector('#sl-chat');
-    const launcher = chat.querySelector('.slc-launcher');
-    const input = chat.querySelector('input[aria-label="Сообщение"]');
-    function openStoreChat(prompt = '') {
-      if (!chat.classList.contains('is-open')) launcher.click();
-      if (prompt && !input.value.trim()) {
-        input.value = prompt;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      input.focus({ preventScroll: true });
-    }
-    document.querySelectorAll('[data-open-chat]').forEach(button => {
-      button.addEventListener('click', () => openStoreChat(button.dataset.openChat));
-    });
-    if (window.matchMedia('(min-width: 940px)').matches) launcher.click();
-  </script>
+  <script src="store.js"></script>
 </body>
 </html>
