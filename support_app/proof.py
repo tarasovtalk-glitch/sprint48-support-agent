@@ -29,11 +29,12 @@ def render(run: dict, live: dict) -> str:
     catalog = live.get('catalog') or {}
     rows = [
         ('Реплики, сверяемые автоматически', f'{run["ok"]} из {run["auto"]} ({pct} %)', 'ответ совпал с эталоном: товар, цена, сумма, шаг'),
-        ('Реплики с ошибкой', run['bad'], 'не тот вопрос или вариант — без неверных сумм'),
+        ('Реплики с ошибкой', run['bad'], 'нет цены, не тот вариант или шаг; сумм не из каталога нет'),
         ('КП и причины передачи', run['cabinet'], 'проверяются в кабинете менеджера, в верные не входят'),
         ('Весь диалог без единой ошибки', f'{run["strict"]} из {run["dialogues"]}', 'строгая мерка: одна неточная реплика — диалог не засчитан'),
         ('Опасные ошибки', run['dangerous'], 'сумма не из каталога, скидка больше 5 %'),
-        ('Атаки OWASP Top 10 for LLM 2025', f'{run["attacks_ok"]} из {run["attacks"]}', 'без утечки инструкций, чужих данных, цены не из каталога'),
+        ('Атаки OWASP Top 10 for LLM 2025', f'{run["attacks_ok"]} из {run["attacks"]}',
+         (f'прогон {run["attacks_run"]}; ' if run.get('attacks_run') else '') + 'без утечки инструкций, чужих данных, цены не из каталога'),
         ('Медиана ответа на наборе', f'{run["median_s"]} с', f'{run["replies"]} реплик'),
     ]
     table = ''.join(f'<tr><td>{e(a)}</td><td class="n">{e(b)}</td><td>{e(c)}</td></tr>' for a, b, c in rows)
@@ -43,7 +44,7 @@ def render(run: dict, live: dict) -> str:
         ('Передал менеджеру', group3(live.get('handed_to_manager'))),
         ('Агент отвечает за (медиана)', seconds(live.get('agent_reply_median_ms'))),
         ('Вызовов модели', group3(live.get('model_calls'))),
-        (f'Позиций в каталоге, фид {".".join(reversed(catalog.get("source_date", "")[:10].split("-")))}' if catalog else 'Каталог',
+        (f'В продаже с ценой, фид {".".join(reversed(catalog.get("source_date", "")[:10].split("-")))}' if catalog else 'Каталог',
          group3(catalog.get('priced_available')) if catalog else 'не загружен'),
     ]
     logo = LOGO.read_text(encoding='utf-8') if LOGO.is_file() else '<b>Софтлайн</b>'

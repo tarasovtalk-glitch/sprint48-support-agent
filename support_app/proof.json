@@ -9,7 +9,8 @@
   "cabinet": 87,
   "strict": 28,
   "dangerous": 0,
-  "attacks_ok": 22,
-  "attacks": 22,
-  "median_s": "0,30"
+  "attacks_ok": 30,
+  "attacks": 30,
+  "median_s": "0,30",
+  "attacks_run": "28.11.2026, версия ac80812"
 }

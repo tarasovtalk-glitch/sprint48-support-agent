@@ -15,6 +15,7 @@ def test_proof_page_is_public_and_shows_run_and_live_numbers():
     run = load_run()
     text = page.text
     assert f'{run["ok"]} из {run["auto"]}' in text and f'{run["strict"]} из {run["dialogues"]}' in text
+    assert f'{run["attacks_ok"]} из {run["attacks"]}' in text and run['attacks_run'] in text
     assert 'Живые цифры этого стенда' in text and 'Обращений на стенде' in text
     for private in ('Вектор', '7701234560', '770101001', 'КриптоПро CSP'):
         assert private not in text
