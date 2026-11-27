@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>Softline Store — демоверсия с ИИ-помощником</title>
+  <link rel="icon" href="../../favicon/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../chat/chat.css">
+  <link rel="stylesheet" href="store.css">
+</head>
+<body>
+  <p class="demo-label">Демо-версия · демонстрация возможностей ИИ-помощника</p>
+  <header class="store-header">
+    <div class="wrap header-main">
+      <a class="brand" href="./" aria-label="Демоверсия Softline Store">Softline <span>Store</span></a>
+      <a href="#catalog" class="catalog-link">Каталог</a>
+      <form class="product-search" aria-label="Поиск по каталогу">
+        <input type="search" name="product" aria-label="Название продукта" placeholder="Найдите программу или лицензию" required maxlength="100">
+        <button type="submit">Найти</button>
+      </form>
+      <button type="button" class="help-link" data-open-chat>Поддержка</button>
+    </div>
+    <nav class="wrap categories" aria-label="Разделы каталога">
+      <a href="#crypto">Криптография</a>
+      <a href="#office">Офисное ПО</a>
+      <a href="#windows">Операционные системы</a>
+      <a href="#kaspersky">Антивирусы</a>
+      <a class="official" href="https://store.softline.ru/" target="_blank" rel="noopener noreferrer">Официальный магазин ↗</a>
+    </nav>
+  </header>
+
+  <main class="wrap store-main">
+    <section class="featured" aria-label="Предложения магазина">
+      <article class="hero">
+        <div>
+          <p class="hero-category">Электронная подпись</p>
+          <h1>КриптоПро CSP 5.0</h1>
+          <p class="hero-description">Бессрочная лицензия на рабочее место. Помощник рассчитает стоимость по количеству и подготовит КП.</p>
+          <button type="button" class="primary" data-open-chat="Нужно КП на 19 бессрочных лицензий КриптоПро CSP 5.0">Рассчитать в чате</button>
+        </div>
+        <img class="hero-image" src="products/cryptopro.png" alt="" width="168" height="168">
+      </article>
+      <article class="service">
+        <p>Поддержка магазина</p>
+        <h2>Помощь с подбором&nbsp;ПО</h2>
+        <p>Уточните условия лицензии, запросите КП или задайте вопрос по заказу.</p>
+        <button type="button" class="service-action" data-open-chat>Написать помощнику</button>
+      </article>
+    </section>
+
+    <section id="catalog" class="catalog" aria-labelledby="catalog-title">
+      <div class="catalog-heading">
+        <h2 id="catalog-title">Популярное ПО</h2>
+        <a href="https://store.softline.ru/catalog/" target="_blank" rel="noopener noreferrer">Весь каталог ↗</a>
+      </div>
+      <ul class="product-list">
+        <li id="crypto" class="product">
+          <div class="product-image"><img src="products/cryptopro.png" alt="" width="168" height="168"></div>
+          <p class="product-type">Электронная подпись</p>
+          <h3><a href="https://store.softline.ru/kripto-pro/-410137/" target="_blank" rel="noopener noreferrer">КриптоПро CSP 5.0</a></h3>
+          <p class="product-details">Бессрочная лицензия на рабочее место</p>
+          <strong class="price">3 700 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит бессрочная лицензия КриптоПро CSP 5.0 на одно рабочее место?" aria-label="КриптоПро CSP: уточнить в чате">Уточнить в чате</button>
+        </li>
+        <li id="office" class="product">
+          <div class="product-image"><img src="products/office.jpg" alt="" width="168" height="168"></div>
+          <p class="product-type">Офисное ПО</p>
+          <h3><a href="https://store.softline.ru/microsoft/ep2-06605-473582/" target="_blank" rel="noopener noreferrer">Microsoft Office 2024</a></h3>
+          <p class="product-details">Для дома и бизнеса, лицензия на один ПК</p>
+          <strong class="price">36 657 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит Microsoft Office 2024 для дома и бизнеса на один ПК?" aria-label="Microsoft Office: уточнить в чате">Уточнить в чате</button>
+        </li>
+        <li id="windows" class="product">
+          <div class="product-image"><img src="products/windows.jpg" alt="" width="168" height="168"></div>
+          <p class="product-type">Операционные системы</p>
+          <h3><a href="https://store.softline.ru/microsoft/fqc-10572-380385/" target="_blank" rel="noopener noreferrer">Microsoft Windows 11 Pro</a></h3>
+          <p class="product-details">Электронный ключ, FQC-10572</p>
+          <strong class="price">30 508 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Сколько стоит Windows 11 Pro FQC-10572 на один компьютер?" aria-label="Windows 11 Pro: уточнить в чате">Уточнить в чате</button>
+        </li>
+        <li id="kaspersky" class="product">
+          <div class="product-image"><img src="products/kaspersky.png" alt="" width="168" height="168"></div>
+          <p class="product-type">Антивирусы</p>
+          <h3><a href="https://store.softline.ru/kaspersky/kl1041rdcfs-416858/" target="_blank" rel="noopener noreferrer">Kaspersky Standard</a></h3>
+          <p class="product-details">Годовая лицензия на три устройства</p>
+          <strong class="price">2 749 ₽</strong>
+          <button type="button" class="product-action" data-open-chat="Нужна новая годовая лицензия Kaspersky Standard на 3 устройства для дома" aria-label="Kaspersky Standard: уточнить в чате">Уточнить в чате</button>
+        </li>
+      </ul>
+      <p class="catalog-note">Цены по выгрузке Softline Store от 27 ноября 2026 года.</p>
+    </section>
+  </main>
+  <script src="../../config.js"></script>
+  <script src="../../api.js"></script>
+  <script src="../../chat/chat.js"></script>
+  <script src="store.js"></script>
+</body>
+</html>
