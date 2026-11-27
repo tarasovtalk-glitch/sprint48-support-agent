@@ -7,7 +7,7 @@
      дальше чат ходит с токеном разговора;
    - ключ менеджера кабинет спрашивает один раз полем и держит до закрытия вкладки.
    Историю разговора хранит сервер: чат восстанавливает её после перезагрузки и опрашивает новые реплики по after.
-   Чего в API пока нет, отвечает 404: экран тогда показывает пример и пишет об этом строкой сверху. */
+   Чего в API пока нет, отвечает 404: экран сообщает, что данные недоступны. */
 (function () {
   'use strict';
   var CFG = window.SUPPORT_CONFIG || {};
@@ -20,7 +20,11 @@
     if (body) h['Content-Type'] = 'application/json';
     return fetch(API + path, { method: method, credentials: 'same-origin', headers: h, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) {
-        if (!r.ok) throw fail(r.status);
+        if (!r.ok) {
+          var error = fail(r.status);
+          if (r.status === 429) error.retryAfter = Number(r.headers.get('Retry-After'));
+          throw error;
+        }
         return r.status === 204 ? {} : r.json();
       });
   }
@@ -111,7 +115,7 @@
   function managerHeaders() { return { 'X-Manager-Key': read(MANAGER_KEY) || '' }; }
   function manager(method, path, body) {
     return raw(method, path, body, managerHeaders()).catch(function (e) {
-      if (e.status === 401 || e.status === 503) askKey(e.status);
+      if (e.status === 401 || e.status === 403 || e.status === 503) askKey(e.status);
       throw e;
     });
   }
@@ -153,19 +157,24 @@
     var c = {
       id: v.id, version: v.version, reason: v.reason, status: v.state === 'pending' ? 'waiting' : 'done',
       client: who, initials: initials(who), first: v.first_client_message || '',
+      summary: v.summary || '', reason_text: v.reason_text || '',
       deadline: at && !isNaN(Date.parse(at)) ? new Date(Date.parse(at) + ANSWER_MIN * 60000).toISOString() : null,
       steps: null, talk: null, talk_earlier: [], help_option: false, can_discount: false
     };
     if (q) {
       var offer = q.offer || {}, qty = q.quantity || 1, price = offer.price_kopecks != null ? offer.price_kopecks / 100 : (q.amount_kopecks || 0) / 100 / qty;
       c.kind = 'quote'; c.deadline_label = 'Отправить до';
-      c.queue_title = 'КП на ' + shortName(offer.name);
+      c.queue_title = q.items && q.items.length > 1 ? 'КП на ' + q.items.length + ' позиции' : 'КП на ' + shortName(offer.name);
       c.title = who + ': ' + c.queue_title;
       c.amount_rub = rub(q.amount_kopecks || 0);
       c.facts = [['Клиент', who], ['Сумма', money(c.amount_rub)]];
       c.kp = {
         buyer: [who, requisites(q)].filter(Boolean).join(', '), vat_rate: 0,
-        items: [{ name: offer.name || 'Позиция каталога', qty: qty, price: price, note: q.requested_users && q.requested_users !== qty ? 'Клиент просил ' + q.requested_users + ', в КП ' + qty + ' по фасовке каталога' : '' }],
+        discount: q.discount_percent || 0,
+        items: q.items && q.items.length ? q.items.map(function (item) {
+          return { name: item.name, qty: item.quantity, price: rub(item.price_kopecks),
+            note: item.requested && item.requested !== item.quantity ? 'Клиент просил ' + item.requested + ', в КП ' + item.quantity + ' по фасовке каталога' : '' };
+        }) : [{ name: offer.name || 'Позиция каталога', qty: qty, price: price, note: q.requested_users && q.requested_users !== qty ? 'Клиент просил ' + q.requested_users + ', в КП ' + qty + ' по фасовке каталога' : '' }],
         terms: [['Оплата', q.payment_terms || 'Предоплата'], ['НДС', q.vat_status || 'Уточняет менеджер']].concat(q.source_date ? [['Цена каталога на', sourceDate(q.source_date)]] : [])
       };
       c.effect = 'После отправки клиент получит в этот же чат **КП файлом PDF**.';
@@ -174,6 +183,7 @@
       c.queue_title = c.title = why.title;
       c.facts = [['Клиент', who]];
       c.reply_draft = '';
+      c.help_option = true;
       c.effect = why.why + '\n' + ANSWER_EFFECT;
     }
     return c;
@@ -217,12 +227,13 @@
     var choice = body.action === 'refuse' ? 'reject' : 'approve';
     var reply = String(body.reply_text || '').trim().slice(0, 400);
     // повтор после обрыва связи идёт с тем же request_id, сервер не решит дважды
-    var key = id + ':' + c.version + ':' + choice + ':' + reply;
+    var remember = !!body.add_to_help;
+    var key = id + ':' + c.version + ':' + choice + ':' + reply + ':' + remember;
     var rid = attempts[key] || (attempts[key] = uuid());
-    var data = { choice: choice, version: c.version, request_id: rid };
+    var data = { choice: choice, version: c.version, request_id: rid, remember: remember };
     if (reply) data.reply = reply;
     return manager('POST', '/manager/cases/' + encodeURIComponent(id) + '/decision', data).then(function (v) {
-      v.updated = nowIso(); closeCase(c, v); return c;
+      v.updated = nowIso(); closeCase(c, v); c.knowledge = v.knowledge; return c;
     });
   }
 
@@ -314,7 +325,7 @@
     box.innerHTML = '<h2 class="h2" id="keyTitle">Вход в кабинет менеджера</h2>' +
       '<p class="dialog__text">' + (status === 503 ? 'На сервере агента не задан ключ менеджера. Попросите администратора стенда.' : 'Введите ключ менеджера стенда. Он хранится только в этой вкладке.') + '</p>' +
       (status === 503 ? '' : '<input class="field" type="password" autocomplete="off" required minlength="24" placeholder="Ключ менеджера" aria-label="Ключ менеджера">' +
-      '<div class="dialog__buttons"><a class="btn btn--grey" href="?demo">Открыть пример</a><button class="btn btn--accent" type="submit">Войти</button></div>');
+      '<div class="dialog__buttons"><button class="btn btn--accent" type="submit">Войти</button></div>');
     box.addEventListener('submit', function (e) {
       e.preventDefault(); write(MANAGER_KEY, box.querySelector('input').value.trim()); location.reload();
     });
@@ -333,14 +344,27 @@
       return method === 'POST' ? chatSend(sid, body || {}) : chatPoll(sid, +(m[2] || 0), m[2] == null);
     }
     if (/^\/chat\/sessions\/[^/]+\/rating$/.test(path)) return Promise.resolve({}); // оценки в API пока нет
+    if (method === 'GET' && path === '/access') return manager('GET', '/manager/access');
+    if (method === 'GET' && path === '/agent/metrics') return manager('GET', '/manager/metrics');
     if (method === 'GET' && path === '/cases') return casesList();
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
     if (method === 'GET' && path === '/journal') return journalList();
+    if (method === 'GET' && path === '/knowledge') return manager('GET', '/manager/knowledge');
     // правка скидки, чат менеджера с клиентом, возврат агенту, пауза и лимит, справка, статистика, настройки
     // и проверка разговоров из журнала: в API их пока нет, экран покажет пример и пометит это строкой сверху
     return Promise.reject(fail(404));
   }
 
-  window.SupportBackend = { call: call };
+  function downloadCases() {
+    return fetch(API + '/manager/cases/export.csv', { credentials: 'same-origin', headers: managerHeaders() })
+      .then(function (r) { if (!r.ok) throw fail(r.status); return r.blob(); })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob), a = document.createElement('a');
+        a.href = url; a.download = 'cases.csv'; a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      });
+  }
+
+  window.SupportBackend = { call: call, downloadCases: downloadCases };
 })();

@@ -1,13 +1,13 @@
 /* Кабинет менеджера по экранам Figma М1–М7: «Сегодня», «Журнал», «Знания», «Агент» (работа и настройки).
    Данные берёт с сервера агента через api.js (контракт в корневом README), без ключей в браузере.
-   ?demo или DEMO=1 при сборке: всё на примере данных из demo-data.js, действия меняют только эту страницу.
-   В демо можно открыть состояния с макета: ?demo&limit (лимит потрачен), ?demo&paused (пауза), ?demo&empty (очередь пуста).
-   Если сервер не отдаёт раздел, вкладка показывает пример и пишет об этом строкой сверху.
+   DEMO=1 при сборке: всё на примере данных из demo-data.js, действия меняют только эту страницу.
+   В демо можно открыть состояния с макета: ?limit (лимит потрачен), ?paused (пауза), ?empty (очередь пуста).
+   Если сервер не отдаёт раздел, вкладка сообщает, что данные недоступны.
    Все окна свои: меню, календарь, подсказки, подтверждения и уведомления. Системных alert и select нет. */
 (function () {
   'use strict';
   var CFG = window.SUPPORT_CONFIG || {};
-  var DEMO = !!CFG.demo || /[?&]demo\b/.test(location.search);
+  var DEMO = !!CFG.demo;
   var API = String(CFG.apiBase || '/support/api').replace(/\/$/, '');
   var SAMPLE = window.CABINET_DEMO;
   var VARIANT = DEMO ? (/[?&](limit|paused|empty)\b/.exec(location.search) || [])[1] : null;
@@ -86,15 +86,14 @@
       return r.status === 204 ? {} : r.json();
     });
   }
-  // раздел с сервера; нет сервера или раздела, берём пример и помечаем вкладку
+  // Примеры доступны только в явно выбранном деморежиме.
   function load(key, path, sample) {
     if (DEMO) { if (store[key] == null) store[key] = copy(sample); return Promise.resolve(store[key]); }
-    if (store[key] != null && store.sample[key]) return Promise.resolve(store[key]);
     return call('GET', path).then(function (d) { store.sample[key] = false; store[key] = d; return d; }, function (e) {
-      store.sample[key] = (e && e.status) || true; if (store[key] == null) store[key] = copy(sample); return store[key];
+      store.sample[key] = (e && e.status) || true; store[key] = null; return null;
     });
   }
-  function isLocal(key) { return DEMO || !!store.sample[key]; }
+  function isLocal(key) { return DEMO; }
   // действие: на сервер, а в примере только на странице
   function act(key, method, path, body, local) {
     if (isLocal(key)) { var r = local ? local() : null; return Promise.resolve(r); }
@@ -125,19 +124,39 @@
     return render();
   }
 
+  var renderVersion = 0;
   function render() {
-    var v = $('#view'), tab = ui.tab;
-    var ready = tab === 'today' ? loadToday()
-      : tab === 'journal' ? Promise.all([loadToday(), load('journal', '/journal', SAMPLE.journal)])
-      : tab === 'knowledge' ? load('knowledge', '/knowledge', SAMPLE.knowledge)
-      : Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]);
-    return Promise.all([ready, load('settings', '/agent/settings', SAMPLE.settings)]).then(function () {
-      if (tab !== ui.tab) return;
-      var html = tab === 'today' ? viewToday() : tab === 'journal' ? viewJournal() : tab === 'knowledge' ? viewKnowledge() : viewAgent();
-      var fresh = ui.lastTab !== tab + ui.sub;
-      ui.lastTab = tab + ui.sub;
-      v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
-      renderTop(); restoreDrafts(); ensureTalk();
+    var v = $('#view'), tab = ui.tab, version = ++renderVersion;
+    function renderSection() {
+      var ready = tab === 'today' ? loadToday()
+        : tab === 'journal' ? Promise.all([loadToday(), load('journal', '/journal', SAMPLE.journal)])
+        : tab === 'knowledge' ? load('knowledge', '/knowledge', SAMPLE.knowledge)
+        : DEMO ? Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)])
+        : load('metrics', '/agent/metrics');
+      return ready.then(function (data) {
+        if (version !== renderVersion) return;
+        var html = !data || (tab === 'journal' && !store.journal)
+          ? '<p class="muted">Данные раздела пока недоступны.</p>'
+          : tab === 'today' ? viewToday() : tab === 'journal' ? viewJournal()
+          : tab === 'knowledge' ? (DEMO ? viewKnowledge() : viewAnswers(data))
+          : DEMO ? viewAgent() : viewMetrics(data);
+        var fresh = ui.lastTab !== tab + ui.sub;
+        ui.lastTab = tab + ui.sub;
+        v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
+        renderTop(); restoreDrafts(); ensureTalk();
+      });
+    }
+    if (DEMO || store.role) return renderSection();
+    return call('GET', '/access').then(function (data) {
+      if (version !== renderVersion) return;
+      store.role = data.role;
+      return renderSection();
+    }, function () {
+      if (version !== renderVersion) return;
+      store = { sample: {} };
+      ui.drafts = {};
+      v.innerHTML = '';
+      renderTop();
     });
   }
 
@@ -178,21 +197,29 @@
     c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
     var st = status().state, h;
     // состояние агента сервер пока не отдаёт: с живым API переключатель паузы не показываем, чтобы не обещать того, чего нет
-    if (!DEMO && store.sample.status) h = '';
+    if (!DEMO) h = '';
     else if (st === 'limit') h = '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '<button class="btn btn--accent" type="button" data-act="limit">Поднять лимит</button></div>';
     else if (st === 'down') h = '<div class="status status--plain">' + badge('danger', 'Агент не отвечает, чаты ведут менеджеры') + '</div>';
     else if (st === 'paused') h = '<div class="status status--paused"><span>Агент на паузе</span><button class="switch switch--agent" type="button" role="switch" aria-checked="false" aria-label="Включить агента" data-act="resume"></button></div>';
     else h = '<div class="status"><span>Агент работает</span><button class="switch switch--agent" type="button" role="switch" aria-checked="true" aria-label="Поставить агента на паузу" data-act="pause"></button></div>';
     $('#agentStatus').innerHTML = h;
-    var key = { today: 'cases', journal: 'journal', knowledge: 'knowledge', agent: 'stats' }[ui.tab], why = store.sample[key], note = '';
-    // вместо данных сервера показан пример: это предупреждение, точка красная. Текст по причине
-    if (!DEMO && why) {
-      note = why === 401 || why === 403 ? 'Вы не вошли в кабинет: нужен ключ менеджера. Пока показан пример, решения из него никуда не уходят'
-        : why === 503 ? 'На сервере агента не задан ключ менеджера. Пока показан пример, решения из него никуда не уходят'
-        : why === 404 ? 'Сервер агента пока не отдаёт этот раздел, показан пример с макета. Действия здесь меняют только эту страницу'
-        : 'Нет связи с сервером агента. Пока показан пример, решения из него никуда не уходят';
-    }
+    var note = store.role === 'jury' ? 'Доступ жюри · учебные обращения, только просмотр' : '';
     var el = $('#notice'); el.hidden = !note; el.innerHTML = note ? badge('danger', note) : '';
+  }
+
+  function viewMetrics(data) {
+    return '<section class="panel"><h2 class="h2">' + (data.sample ? 'Статистика учебных диалогов' : 'Статистика стенда') + '</h2>' +
+      facts([['Диалоги', data.cases], ['Вызовы модели', data.model_calls],
+        ['Входящие токены', data.input_tokens], ['Исходящие токены', data.output_tokens],
+        ['Расчётная стоимость', (data.cost_microrubles / 1000000).toLocaleString('ru-RU', { maximumFractionDigits: 4 }) + ' ₽']]) + '</section>';
+  }
+
+  function viewAnswers(data) {
+    var answers = data.answers || [];
+    return '<section class="panel"><h2 class="h2">Сохранённые ответы менеджеров</h2>' +
+      (answers.length ? '<div class="glist">' + answers.map(function (entry) {
+        return '<article class="plate"><b class="plate__title">' + t(entry.question) + '</b><p>' + rich(entry.answer) + '</p></article>';
+      }).join('') + '</div>' : '<p class="nothing">Сохранённых ответов пока нет.</p>') + '</section>';
   }
 
   /* ---------- Сегодня ---------- */
@@ -239,7 +266,11 @@
     var h = '<section class="case" aria-label="' + esc(c.title) + '"><div class="case__top' + (price == null || inChat ? ' case__top--short' : '') + '">' + caseBadge(c) +
       (price != null && !inChat ? '<span class="num" id="price-' + id + '">' + money(price) + '</span>' : '') + '</div>';
     h += '<div class="case__intro"><div class="case__about"><h2 class="h2">' + t(c.title) + '</h2>' +
-      (c.first ? '<p class="bubble" title="' + esc(c.first) + '"><span>' + t(c.first) + '</span></p>' : '') + '</div>' + stepsHtml(c) + '</div>';
+      (c.first ? '<p class="bubble" title="' + esc(c.first) + '"><span>' + t(c.first) + '</span></p>' : '') +
+      (c.summary ? '<p class="effect">' + t(c.summary) + '</p>' : '') +
+      (c.reason_text ? '<p class="muted">' + t(c.reason_text) + '</p>' : '') + '</div>' + stepsHtml(c) + '</div>';
+
+    if (store.role === 'jury') return h + (c.kp ? '<hr class="dash">' + kpHtml(c, false) : '') + '</section>';
 
     if (mode === 'journal' && (c.status === 'waiting' || c.status === 'in-chat')) {
       h += '<p class="effect">' + rich(c.owner ? c.effect : 'Решение ждёт во вкладке «Сегодня»: там ответ клиенту и все действия.') + '</p>' +
@@ -262,7 +293,7 @@
       var d = draft(c);
       h += '<hr class="dash"><div class="reply"><label class="label"><span class="label__text medium">Ответ для клиента</span>' +
         '<textarea class="field" rows="2" data-draft="reply" data-id="' + id + '" placeholder="Что ответить клиенту">' + esc(d.reply) + '</textarea></label>' +
-        (c.help_option ? '<label class="check"><button class="switch" type="button" role="switch" aria-checked="' + (d.help !== false) + '" data-act="help" data-id="' + id + '" aria-label="Добавить ответ в справку"></button>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' : '') + '</div>';
+        (c.help_option ? '<label class="check"><button class="switch" type="button" role="switch" aria-checked="' + (DEMO ? d.help !== false : d.help === true) + '" data-act="help" data-id="' + id + '" aria-label="Добавить ответ в справку"></button>' + t('Добавить ответ в справку, в следующий раз агент ответит сам') + '</label>' : '') + '</div>';
       h += '<p class="effect">' + rich(c.effect) + '</p><div class="case__buttons"><button class="btn btn--accent' + (ui.busy[c.id] ? ' is-busy' : '') + '" type="button" data-act="answer" data-id="' + id + '" data-needs="reply"' + (String(d.reply || '').trim() ? '' : ' disabled') + '>' + (ui.busy[c.id] ? 'Отправляю…' : 'Ответить клиенту') + '</button></div>';
       return h + '</section>';
     }
@@ -423,6 +454,7 @@
     }
     var groups = jGroups(shown, day), dk = day.toDateString(), filtered = !!(q || ui.jFilter);
     var left = '<section class="panel" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
+      (DEMO || store.role === 'jury' ? '' : '<button class="btn btn--grey" type="button" data-act="export-csv">CSV</button>') +
       '<button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button></div>' +
       '<div class="chips"><button class="chip' + (ui.jFilter === 'open' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="open" aria-pressed="' + (ui.jFilter === 'open') + '">Не закрыты' + counter(open, true) + '</button>' +
       '<button class="chip' + (ui.jFilter === 'review' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="review" aria-pressed="' + (ui.jFilter === 'review') + '">Проверить' + counter(review, !review) + '</button></div>' +
@@ -816,6 +848,7 @@
       case 'edit-kp': ui.kpEdit[id] = true; ui.discount[id] = (c.kp && c.kp.discount) || 0; render().then(function () { var f = $('#disc-' + id); if (f) { f.focus(); f.select(); } }); return;
       case 'cancel-edit': ui.kpEdit[id] = false; ui.discount[id] = 0; render(); return;
       case 'send-kp': return sendKp(c, b);
+      case 'export-csv': window.SupportBackend.downloadCases().catch(function () { toast('Не удалось выгрузить журнал'); }); return;
       case 'help': var dh = draft(c); dh.help = b.getAttribute('aria-checked') !== 'true'; b.setAttribute('aria-checked', dh.help); return;
       case 'answer': return answer(c, b);
       case 'return': return giveBack(c, b);
@@ -936,7 +969,7 @@
     }, function () { delete ui.busy[c.id]; render(); });
   }
   function answer(c) {
-    var d = draft(c), text = String(d.reply || '').trim(), help = c.help_option && d.help !== false;
+    var d = draft(c), text = String(d.reply || '').trim(), help = c.help_option && (DEMO ? d.help !== false : d.help === true);
     if (!text) return;
     ui.busy[c.id] = true; render();
     act('cases', 'POST', '/cases/' + encodeURIComponent(c.id) + '/decision', { action: 'answer', reply_text: text, add_to_help: help }, function (res) {
@@ -953,7 +986,9 @@
       delete ui.busy[c.id]; delete ui.drafts[c.id];
       if (!isLocal('cases')) {
         c.status = 'done'; c.done_label = 'Ответ отправлен в ' + storyNow('cases');
-        toast('Ответ отправлен клиенту в чат'); leave(c, render); return;
+        toast(c.knowledge && c.knowledge.saved ? 'Ответ отправлен и сохранён в знаниях' :
+          c.knowledge && c.knowledge.reason ? 'Ответ отправлен. Сохранение отклонено: ' + c.knowledge.reason : 'Ответ отправлен клиенту в чат');
+        leave(c, render); return;
       }
       toast(help ? 'Ответ отправлен клиенту и добавлен в справку' : 'Ответ отправлен клиенту, вы в чате');
       render();
@@ -1062,7 +1097,7 @@
   // на «Сегодня» новые случаи приходят без перезагрузки; пока менеджер печатает или открыто окно, экран не трогаем
   var lastCases = '';
   function refresh() {
-    if (DEMO || store.sample.cases) return;
+    if (DEMO || !store.role) return;
     if (ui.tab !== 'today' && ui.tab !== 'journal') return;
     var busy = pop || dialog || (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName));
     call('GET', '/cases').then(function (d) {
@@ -1080,9 +1115,11 @@
   if (!DEMO) store.sample.status = true;
   if (VARIANT === 'limit') store.status = { state: 'limit', since: '10:07' };
   if (VARIANT === 'paused') store.status = { state: 'paused', since: '10:07' };
-  loadToday().then(function () {
-    if (VARIANT === 'empty') cases().forEach(function (c) { c.status = 'done'; c.done_label = 'Закрыт'; });
-    route();
-  });
+  if (VARIANT === 'empty') {
+    loadToday().then(function () {
+      cases().forEach(function (c) { c.status = 'done'; c.done_label = 'Закрыт'; });
+      route();
+    });
+  } else route();
   setInterval(refresh, 5000);
 })();

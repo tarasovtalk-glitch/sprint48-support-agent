@@ -515,7 +515,7 @@
      Интерфейс только показывает то, что прислал сервер: текст, кнопки-ответы, файлы, серые строки и закрытие.
      Ключей и логики агента здесь нет. Форма сообщений как у бота Webim, перевод в api.js. */
   var live = (function () {
-    var sid = '', lastSeq = 0, timer = 0, closed = false, busy = 0, dots = null;
+    var sid = '', lastSeq = 0, timer = 0, closed = false, busy = 0, dots = null, opening = null;
     var KEY = 'sl-support-session';
     function call(method, path, body) {
       // живой API: запросы переводит api.js, экран остаётся тем же
@@ -527,7 +527,12 @@
         headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined
       }).then(function (r) {
         clearTimeout(t);
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+          if (!r.ok) {
+            var error = new Error('HTTP ' + r.status);
+            error.status = r.status;
+            if (r.status === 429) error.retryAfter = Number(r.headers.get('Retry-After'));
+            throw error;
+          }
         return r.status === 204 ? {} : r.json();
       }, function (e) { clearTimeout(t); throw e; });
     }
@@ -564,27 +569,39 @@
     }
     function run() { stop(); timer = setInterval(poll, 3000); }
     function stop() { clearInterval(timer); timer = 0; }
-    // Сервер не ответил: говорим прямо и даём написать ещё раз, следующее сообщение снова пойдёт на сервер
-    function fail() {
+    // При ошибке показываем причину и оставляем возможность повторить отправку.
+    function fail(error) {
       typing(false);
+      if (error && error.status === 429) {
+        var seconds = error.retryAfter;
+        sys('Слишком много запросов. Сообщение не отправлено. Повторите ' +
+          (Number.isInteger(seconds) && seconds > 0 && seconds <= 60 ? 'через ' + seconds + ' с.' : 'через минуту.'));
+        return;
+      }
       sys('Помощник сейчас не отвечает. Напишите ещё раз через минуту');
     }
     function open() {
-      return call('POST', '/chat/sessions', { page: location.href }).then(function (r) {
+      if (opening) return opening;
+      opening = call('POST', '/chat/sessions', { page: location.href }).then(function (r) {
         sid = r.session_id || ''; try { sessionStorage.setItem(KEY, sid); } catch (e) {}
         show(r.messages); run();
+      }).finally(function () {
+        opening = null;
       });
+      return opening;
     }
     // после приветствия шесть тем, как в меню Webim на сайте: тема уходит агенту обычной репликой клиента
     var LIVE_TOPICS = ['Выставить счёт', 'Тендер или госзакупка', 'Статус заказа и документы',
       'Ключ, активация, техническая поддержка', 'Google Workspace', 'Задать вопрос'];
     function topics() {
-      pills(LIVE_TOPICS.map(function (t) { return { text: t, go: function () { send(t, null, true); } }; }));
+      pills(LIVE_TOPICS.map(function (t) { return { text: t, go: function () { send(t); } }; }));
       body.scrollTop = body.scrollHeight;
     }
     function fresh() {
       sys('Сегодня, ' + hhmm()); typing(true);
-      open().then(function () { typing(false); topics(); }, fail);
+      open().then(function () {
+        if (!busy) { typing(false); topics(); }
+      }, function (error) { if (!busy) fail(error); });
     }
     function start() {
       setHead(BOT, AGENT_ROLE);
@@ -597,18 +614,32 @@
         if (!closed && !(r.messages || []).some(function (m) { return m.from === 'client'; })) topics();
       }, function () { sid = ''; try { sessionStorage.removeItem(KEY); } catch (e) {} typing(false); fresh(); });
     }
-    function send(text, buttonId, echoed) {
-      text = String(text || '').trim(); if (!text) return;
-      // ответ клиента закрывает прежние кнопки-ответы: живы только кнопки последней реплики, как после перезагрузки
-      [].forEach.call(body.querySelectorAll('.slc-pills'), function (x) { x.remove(); });
-      if (!echoed) me(text);
+    function send(text, buttonId) {
+      text = String(text || '').trim(); if (!text || busy || closed) return false;
       busy++; typing(true);
       var data = { text: text }; if (buttonId) data.button_id = buttonId;
       (sid ? Promise.resolve() : open()).then(function () {
         return call('POST', '/chat/sessions/' + encodeURIComponent(sid) + '/messages', data);
       }).then(function (r) {
-        busy--; typing(false); show(r.messages);
-      }, function () { busy--; fail(); });
+        busy--; typing(false);
+        [].forEach.call(body.querySelectorAll('.slc-pills'), function (x) { x.remove(); });
+        me(text); show(r.messages);
+      }, function (error) {
+        busy--; fail(error);
+        if (!buttonId && error && error.status === 429) {
+          if (!input.value.trim()) {
+            input.value = text;
+            sendState();
+          } else {
+            var previous = body.querySelector('.slc-pills.is-retry');
+            if (previous) previous.remove();
+            var retry = pills([{ text: 'Повторить предыдущую отправку' }]).firstChild;
+            retry._retryText = text;
+            retry.parentNode.classList.add('is-retry');
+          }
+        }
+      });
+      return true;
     }
     function rate(n) { if (sid) call('POST', '/chat/sessions/' + encodeURIComponent(sid) + '/rating', { stars: n }).catch(function () {}); }
     return { start: start, send: send, rate: rate };
@@ -623,7 +654,7 @@
   }
   function send(text) {
     text = (text || '').trim(); if (!text) return;
-    if (LIVE) { live.send(text); return; }
+    if (LIVE) return live.send(text);
     me(text);
     if (MODE === 'now') { if (managerIn && /спасиб/i.test(text)) { bot('Рад был помочь! Хорошего дня.', I.person, false); closeChat(); } else callManagerNow(); }
     else onText(text);
@@ -661,19 +692,24 @@
     else if (act === 'menu-item') menu.classList.remove('is-open');
     else if (act === 'pill') {
       var box = b.parentNode; if (box.classList.contains('is-used')) return;
+      if (LIVE) { live.send(b._retryText || b.textContent, b._live); return; }
       box.classList.add('is-used'); b.classList.add('is-on');
       if (NEW) box.remove(); // кнопки пропадают, выбор становится сообщением клиента
       me(b.textContent);
-      if (MODE === 'now') callManagerNow(); else if (b._live) live.send(b.textContent, b._live, true); else b._go();
+      if (MODE === 'now') callManagerNow(); else b._go();
     }
     else if (act === 'file') { if (b._url) window.open(b._url, '_blank', 'noopener'); else openDoc(b._doc); }
-    else if (act === 'send') { if (NEW && !input.value.trim()) recStart(); else { send(input.value); input.value = ''; sendState(); } }
+    else if (act === 'send') { if (NEW && !input.value.trim()) recStart(); else submitInput(); }
     else if (act === 'emoji') root.querySelector('.slc-emoji').classList.toggle('is-open');
     else if (act === 'emoji-pick') { var pos = input.selectionStart == null ? input.value.length : input.selectionStart; input.value = input.value.slice(0, pos) + b.textContent + input.value.slice(pos); root.querySelector('.slc-emoji').classList.remove('is-open'); input.focus(); sendState(); }
     else if (act === 'rec-cancel') recStop(false);
     else if (act === 'rec-send') recStop(true);
   });
-  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { send(input.value); input.value = ''; sendState(); } });
+  function submitInput() {
+    if (send(input.value) === false) return;
+    input.value = ''; sendState();
+  }
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitInput(); });
 
   /* ---------- Голосом: запись, расшифровка в браузере, ответ по тексту ---------- */
   // Круглая кнопка: пустое поле = микрофон, есть текст = отправить
