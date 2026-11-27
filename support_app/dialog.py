@@ -908,10 +908,10 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
         return (f'{title} есть в каталоге, но сейчас недоступен для заказа, поэтому цену не называю. '
                 + queue('price_confirmation') + ' Если подойдёт замена, напишите «аналог» — предложу из каталога.'), []
     qty = state.get('quantity')
-    if qty and all((o.get('sku') or '').upper().startswith(KASPERSKY_FAMILIES) for o in available):
-        if not any(units_for(o, qty) is not None for o in available):
-            return (f'У предложений Kaspersky для этого продукта нет подтверждённой цены на {qty} устройств. '
-                    + queue('price_confirmation')), []
+    tiered = [o for o in available if (o.get('sku') or '').upper().startswith(KASPERSKY_FAMILIES)]
+    if qty and tiered and not any(units_for(o, qty) is not None for o in tiered):
+        return (f'У предложений Kaspersky для этого продукта нет подтверждённой цены на {qty} устройств. '
+                + queue('price_confirmation')), []
 
     if (re.match(r'^(?:ооо|ао|пао|ип|гбу|мбу)\b', t) or re.search(r'сч[её]т на', t)) and not provided_inn:
         offers = choose(family, state, text)
