@@ -10,7 +10,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'eval'))
 from ceny import CARD, PRICE, explained, kopecks  # noqa: E402
-from eval.local import Chat, mini_catalog  # noqa: E402
+from eval.local import Chat, MANAGER_KEY, mini_catalog  # noqa: E402
+from support_app.catalog import discounted  # noqa: E402
 from support_app.dialog import find_family, words  # noqa: E402
 
 NABOR = [json.loads(line) for line in open(ROOT / 'eval' / 'nabor60.jsonl', encoding='utf-8')]
@@ -81,5 +82,18 @@ def test_every_amount_comes_from_catalog(client, db, dialog):
         text = ' '.join(m.get('text') or '' for m in (r.get('messages') or [])[-3:] if m.get('role') != 'client') or r.get('reply', '')
         own = {price_of[x] for x in CARD.findall(text) if x in price_of}
         seen |= own
+        totals = set()
+        if r['case']['state'] == 'pending' and 'Итого:' in text:
+            queue = client.get('/support/api/manager/cases', headers={'X-Manager-Key': MANAGER_KEY}).json()['cases']
+            quote = next(row.get('quote') for row in queue if row['id'] == r['case']['id']) or {}
+            items = quote.get('items', [])
+            if items:
+                assert all(item['price_kopecks'] == price_of[item['id']] for item in items)
+                total = sum(price_of[item['id']] * item['quantity'] for item in items)
+                assert quote['amount_kopecks'] == total
+                discount = quote.get('discount_percent', 0)
+                assert 0 <= discount <= 5
+                totals = {total, discounted(total, discount)}
         for m in PRICE.finditer(text):
-            assert explained(kopecks(m.group(1)), own or seen), f'{dialog["id"]} ход {i + 1}: {m.group(0)} не из каталога — {text[:200]}'
+            amount = kopecks(m.group(1))
+            assert amount in totals or explained(amount, own or seen), f'{dialog["id"]} ход {i + 1}: {m.group(0)} не из каталога — {text[:200]}'

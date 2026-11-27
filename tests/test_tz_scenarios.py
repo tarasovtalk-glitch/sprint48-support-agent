@@ -1,5 +1,8 @@
 """Сценарии ТЗ, которые уже работают и показаны в видео. Любая правка обязана оставить их зелёными."""
+from uuid import uuid4
+
 from conftest import REQ
+from eval.local import MANAGER_KEY
 
 
 def test_cryptopro_19_workstations_quote(chat):
@@ -29,6 +32,29 @@ def test_needs_mail_and_files_selection(chat):
     assert 'работать' in r['reply']
     r = chat.say(action='deployment', value='local')
     assert 'Варианты по данным каталога' in r['reply'] and '₽' in r['reply']
+
+
+def test_needs_mail_and_files_requisites_make_one_quote(chat, client):
+    chat.say('Не знаю, что нужно, но хотим защитить почту и файлы на 50 сотрудников')
+    chat.say('Почта на своем сервере Linux, компьютеры Windows')
+    selected = chat.say('А российский аналог?')
+    item_ids = {button['value'] for button in selected['buttons'] if button['action'] == 'select_offer'}
+    assert len(item_ids) == 2
+
+    reply = chat.say(REQ)
+    case = reply['case']
+    assert case['state'] == 'pending' and 'Черновик КП' in reply['reply']
+    manager = {'X-Manager-Key': MANAGER_KEY}
+    cases = client.get('/support/api/manager/cases', headers=manager).json()['cases']
+    quote = next(row['quote'] for row in cases if row['id'] == case['id'])
+    assert {item['id'] for item in quote['items']} == item_ids
+    assert sum(item['price_kopecks'] * item['quantity'] for item in quote['items']) == quote['amount_kopecks']
+    approved = client.post(f'/support/api/manager/cases/{case["id"]}/decision', headers=manager, json={
+        'choice': 'approve', 'version': case['version'], 'request_id': str(uuid4()),
+    })
+    assert approved.status_code == 200
+    pdf = client.get(approved.json()['document_url'])
+    assert pdf.status_code == 200 and pdf.content.startswith(b'%PDF')
 
 
 def test_discount_over_5_goes_to_manager(chat):

@@ -49,10 +49,7 @@ REGISTRY_REFERENCES = (
 REGISTRY_SOURCE = 'https://reestr.digital.gov.ru/reestr/?EX_PAGE_N=12&EX_PAGE_S=100&PAGE_N=304&PAGE_S=100'
 WORKPLACE_CHOICES = [('Рабочие места', 'placement', 'workstation'), ('Сервер', 'placement', 'server')]
 JOIN_MANAGER = [('Позвать оператора', 'handoff', '')]
-QUOTE_CUSTOMER_PROMPT = (
-    'Для КП укажите название организации, ИНН и КПП. '
-    'Для проверки стенда используйте тестовые реквизиты: ООО «Демо», ИНН 0000000000, КПП 000000000.'
-)
+QUOTE_CUSTOMER_PROMPT = 'Для КП укажите название организации, ИНН и КПП.'
 QUOTE_REQUISITES = re.compile(r'\b(ИНН|КПП)\b[\s:=№]*([0-9][A-Za-z0-9]*)', re.I)
 INN_FORMAT = re.compile(r'(?:[0-9]{10}|[0-9]{12})')
 INN_CONFIRM = re.compile(r'^\s*(?:да|ага|верно|все\s+верно|правильно|подтверждаю|инн\s+верн\w*|верный|формируйте)(?![^\W_])')
@@ -369,7 +366,9 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
                 enriched.setdefault(group['topic'], group)
             result['groups'] = list(enriched.values())
     shown = [(group['topic'], offer) for group in result['groups'] for offer in group['offers'][:1]]
+    state.pop('needs_quote_items', None)
     if not shown:
+        state.pop('offered_ids', None)
         return ('По фиду не нашёл подходящий вариант с подтверждённой записью в реестре.' if registry else 'По этим требованиям точного варианта в выдаче нет.') + ' Могу позвать оператора.', JOIN_MANAGER
     state['offered_ids'] = [offer['id'] for _, offer in shown]
     lines = ['Варианты по данным каталога:']
@@ -379,12 +378,18 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
         lines.append('Срок вы не назвали — показываю на 12 месяцев; нужен другой срок — напишите.')
     if registry:
         lines.append('Номера из реестра отечественного ПО. Источник указан рядом, если он известен.')
+    quote_items = []
     for topic, offer in shown:
         price = chat_price(offer['price_kopecks']) if offer['price_kopecks'] is not None else 'цену уточнит менеджер'
         registry_text = f', реестр № {offer["registry"]} {offer.get("registry_source", "")}' if registry else ''
         units = purchasable_units(offer, state['quantity'])
         total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
         lines.append(f'{topic}: {offer["name"]} — {price}{total}{registry_text}. Карточка: {offer["url"] or ""}')
+        if units and offer['available'] and offer['price_kopecks']:
+            quote_items.append({'id': offer['id'], 'quantity': state['quantity'], 'units': units})
+    if state['flow'] == 'needs' and len(quote_items) == len(shown):
+        state['needs_quote_items'] = quote_items
+        lines.append('Для одного КП на все позиции пришлите название организации, ИНН и КПП.')
     # на кнопке — название того, что выбирает клиент, а не тема запроса («MDaemon Standard» вёл к Messaging Server)
     def label(topic, offer):
         name = normalize(offer['name'])
@@ -476,6 +481,10 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if text and not state.get('awaiting_customer') and QUOTE_REQUISITES.search(text) and state.get('flow') != 'mdaemon':
         remember_quote_customer(state, text)
         if state.get('flow') == 'cryptopro' and state.get('offer_id') and state.get('quantity'):
+            return queue_quote(db, row, state, catalog)
+        needs_items = state.get('needs_quote_items')
+        if state.get('flow') == 'needs' and needs_items and all(item['quantity'] == state.get('quantity') for item in needs_items):
+            state['g_items'] = needs_items
             return queue_quote(db, row, state, catalog)
     if state.get('awaiting_customer') and text and (QUOTE_REQUISITES.search(text) or re.search(r'\b(?:ооо|ао|пао|зао|ип|гбу|мбу|фгуп)\b|[«"]', query)
                                                     or INN_FORMAT.search(text)):
@@ -594,6 +603,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         if tool == 'draft_quote':
             append_event(db, row['id'], 'model_tool_executed', tool)
         state['offer_id'] = value
+        if state.pop('needs_quote_items', None) is not None:
+            state.pop('g_items', None)
         return queue_quote(db, row, state, catalog)
     if action == 'quote' or (state.get('offer_id') and ('кп' in query or 'коммерческ' in query)):
         return queue_quote(db, row, state, catalog)
