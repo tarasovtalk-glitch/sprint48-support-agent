@@ -17,16 +17,20 @@ from typing import Literal
 from urllib.parse import quote as url_quote
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units, read_only
 from .knowledge import AGENT_RULES, BUILT_IN_ARTICLES, all_answers, question_for, save_answer
-from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, run_turn, tool_request
+from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, observe_tool, run_turn, tool_request
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .model import QWEN_MODEL, choose_tool, classify
+from .notify import Max, Notifier, Telegram, in_background
+from .proof import load_run, render as render_proof
+from .webim import WebimClient, button_id, parse_event
+from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
 from .scenario import load_scenario
 from .selection import catalog_router
 from .jury import create_jury_store
@@ -85,6 +89,11 @@ class JuryQuestion(BaseModel):
 
 class AgentPause(BaseModel):
     paused: StrictBool
+
+
+class NotifySettings(BaseModel):
+    notify: StrictBool | None = None
+    channel: Literal['telegram', 'max'] | None = None
 
 
 def require_key(expected: str, supplied: str):
@@ -166,6 +175,13 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     app = FastAPI(title='SMF Support', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     catalog_path = Path(os.environ.get('SUPPORT_CATALOG_DATABASE', database.with_name('catalog.sqlite3')))
+    webim = WebimClient(os.environ.get('WEBIM_BASE_URL', ''), os.environ.get('WEBIM_BOT_TOKEN', ''))
+    webim_secret = os.environ.get('WEBIM_WEBHOOK_SECRET', '')
+    webim_department = os.environ.get('WEBIM_DEP_KEY', '')
+    public_url = os.environ.get('SUPPORT_PUBLIC_URL', '').rstrip('/')
+    cabinet_url = os.environ.get('SUPPORT_CABINET_URL', '')
+    notifier = Notifier(Telegram(os.environ.get('TELEGRAM_BOT_TOKEN', ''), os.environ.get('TELEGRAM_CHAT_ID', ''), cabinet_url),
+                        Max(os.environ.get('MAX_BOT_TOKEN', ''), os.environ.get('MAX_CHAT_ID', ''), cabinet_url))
     app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
 
     def cabinet_role(x_manager_key: str = Header(default='')) -> str:
@@ -260,6 +276,14 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     @app.post(PREFIX + '/case/messages', dependencies=[Depends(public_demo)])
     def message(payload: Message, case_id: str = Depends(client)):
+        started = time.perf_counter()
+        result = chat_turn(payload, case_id)
+        with store.connect(write=True) as db:  # живая скорость ответа агента — для кабинета
+            db.execute('INSERT INTO reply_times(case_id, ms) VALUES (?, ?)',
+                       (case_id, round((time.perf_counter() - started) * 1000)))
+        return result
+
+    def chat_turn(payload: Message, case_id: str):
         if chat_only:
             if payload.channel != 'chat':
                 raise HTTPException(422, 'This stand accepts chat messages only.')
@@ -278,18 +302,27 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                             'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
             plan = tool_request(payload.text or '', payload.action, payload.value, existing_context)
             model_options = {'api_key': model_key, 'model_uri': model_uri, 'daily': daily_limit, 'total': total_limit}
-            selected_tool = choose_tool(store, case_id, *plan, **model_options) if plan else None
+            steps = run_agent(store, case_id, *plan, lambda name: observe_tool(existing_context, catalog_path, name),
+                              **model_options) if plan else []
+            selected_tool = steps[-1] if steps else None
             cues = intent_cues(payload.text) if payload.text and not existing_context.get('awaiting_customer') else ''
             hint = classify(store, case_id, cues, **model_options) if cues and not plan else 'unknown'
             with store.connect(write=True) as db:
                 state = chat_state(db, case_id)
+                for step in steps:  # читающие шаги цикла уже выполнены — в журнал шагов агента
+                    if step in OBSERVING_TOOLS:
+                        append_event(db, case_id, 'model_tool_executed', step)
                 if selected_tool:
-                    append_event(db, case_id, 'model_tool_selected', selected_tool)
+                    append_event(db, case_id, 'model_tool_selected', ' → '.join(steps))
                 client_entry = save_chat_message(db, case_id, 'client', customer_text(payload.text, payload.action, payload.value))
-                reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
+                before = get_case(db, case_id)
+                reply, choices = run_turn(db, before, state, catalog_path,
                                           text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,
                                           page_url=payload.page_url, tool=selected_tool)
                 case = get_case(db, case_id)
+                if before['state'] != 'pending' and case['state'] == 'pending':
+                    notifier.case_queued(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None), case_id,
+                                         state.get('queue_reason', ''), state.get('quote_frozen', state.get('quote')))
                 document_url = None
                 quote = state.get('quote_frozen', state.get('quote'))
                 if (case['state'] == 'pending' and state.get('queue_reason') == 'quote_review' and quote
@@ -356,6 +389,52 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             view = case_view(get_case(db, case_id))
         return {'reply': reply, 'intent': intent, 'document_url': document_url, 'case': view}
 
+    def webim_turn(chat_id: int, message_id: str, text: str, pressed: str | None):
+        """Одна реплика клиента из Webim: тот же ход агента, что в веб-чате, ответ — через Webim API."""
+        with store.connect(write=True) as db:
+            if message_id and db.execute('SELECT 1 FROM webim_seen WHERE message_id=?', (message_id,)).fetchone():
+                return  # Webim повторил доставку
+            if message_id:
+                db.execute('INSERT INTO webim_seen VALUES(?)', (message_id,))
+            row = db.execute('SELECT * FROM webim_chats WHERE chat_id=?', (chat_id,)).fetchone()
+            if row is None:
+                case_id = uuid4().hex
+                db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)',
+                           (case_id, token_hash(secrets.token_urlsafe(32)), json.dumps(scenario.offer())))
+                append_event(db, case_id, 'opened', 'webim')
+                db.execute('INSERT INTO webim_chats(chat_id,case_id) VALUES(?,?)', (chat_id, case_id))
+                known = {}
+            else:
+                case_id, known = row['case_id'], json.loads(row['buttons'])
+            was_pending = get_case(db, case_id)['state'] == 'pending'
+        choice = known.get(pressed) if pressed else None
+        payload = Message(action=choice[0], value=choice[1]) if choice else Message(text=text or 'Позвать оператора')
+        try:
+            result = message(payload, case_id=case_id)
+        except Exception:  # сбой агента не оставляет клиента без ответа: чат — живому оператору
+            webim.redirect(chat_id, webim_department)
+            raise
+        webim.send_text(chat_id, result['reply'])
+        if result['buttons']:
+            webim.send_buttons(chat_id, result['buttons'])
+        if result['document_url'] and public_url:
+            webim.send_file(chat_id, public_url + result['document_url'], 'Документ Softline.pdf')
+        with store.connect(write=True) as db:
+            db.execute('UPDATE webim_chats SET buttons=? WHERE chat_id=?', (json.dumps(
+                {button_id(b['action'], b['value']): [b['action'], b['value']] for b in result['buttons']}), chat_id))
+        if not was_pending and result['case']['state'] == 'pending':
+            webim.redirect(chat_id, webim_department)  # дальше ведёт менеджер в Webim, сводка — в кабинете
+
+    @app.post(PREFIX + '/webim/{secret}')
+    def webim_event(secret: str, body: dict = Body(default={})):
+        if not chat_only or not webim.enabled or len(webim_secret) < 24 or not secrets.compare_digest(secret.encode(), webim_secret.encode()):
+            raise HTTPException(404)
+        event = parse_event(body)
+        if event:
+            in_background(webim_turn, *event)
+        return {'result': 'ok'}
+
+
     @app.get(PREFIX + '/documents/{access_id}')
     def document(access_id: str):
         if not 30 <= len(access_id) <= 64:
@@ -412,6 +491,26 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             set_setting(db, 'agent_paused', '1' if payload.paused else '0')
             set_setting(db, 'paused_since', since)
         return {'state': 'paused' if payload.paused else 'on', 'since': since}
+
+    @app.get(PREFIX + '/manager/notifications')
+    def notifications(reader: Store = Depends(cabinet_reader), role: str = Depends(cabinet_role)):
+        with store.connect() as db:
+            view = notifier.view(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None))
+        return {**view, 'editable': role in ('manager', 'admin')}
+
+    @app.post(PREFIX + '/manager/notifications', dependencies=[Depends(manager)])
+    def set_notifications(payload: NotifySettings):
+        if payload.channel is not None and not notifier.channels.get(payload.channel, None):
+            raise HTTPException(422, 'Unknown channel.')
+        if payload.channel is not None and not notifier.channels[payload.channel].enabled:
+            raise HTTPException(409, 'Channel is not connected.')
+        with store.connect(write=True) as db:
+            if payload.notify is not None:
+                set_setting(db, 'notify_on', '1' if payload.notify else '0')
+            if payload.channel is not None:
+                set_setting(db, 'notify_channel', payload.channel)
+            view = notifier.view(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None))
+        return {**view, 'editable': True}
 
     @app.get(PREFIX + '/manager/metrics')
     def manager_metrics(reader: Store = Depends(cabinet_reader)):
@@ -490,6 +589,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 {'code': r['code'], 'title': reason_text(r['code']) or 'Передано менеджеру', 'count': r['cnt']}
                 for r in reason_rows
             ]
+            speed = reply_speed(db, excl)
         catalog_info = None
         if catalog_path.is_file():
             try:
@@ -527,7 +627,12 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             'catalog': catalog_info,
             'year': now_msk.year, 'month': now_msk.month, 'day': now_msk.day, 'days_in_month': days_in_month,
             'sample': reader is not store,
+            **speed,
         }
+
+    @app.get(PREFIX + '/proof', response_class=HTMLResponse)
+    def proof():
+        return HTMLResponse(render_proof(load_run(), manager_metrics(store)), headers={'Cache-Control': 'no-store'})
 
     @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
@@ -752,6 +857,31 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         return {'events': [dict(e) for e in events], 'usage': [dict(u) for u in usage], 'messages': messages}
 
     return app
+
+
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered, middle = sorted(values), len(values) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def reply_speed(db, excluded: str) -> dict:
+    """Живая скорость: агент — медиана времени обработки реплики сервером; менеджер — от передачи до первого ответа."""
+    agent = [r[0] for r in db.execute(
+        'SELECT ms FROM reply_times WHERE case_id NOT IN (SELECT value FROM json_each(?)) ORDER BY id DESC LIMIT 1000',
+        (excluded,))]
+    manager = [r[0] for r in db.execute('''
+        SELECT (julianday(MIN(m.created)) - julianday(h.at)) * 86400
+        FROM (SELECT case_id, MIN(created) AS at FROM journal WHERE event = 'sent_to_manager' GROUP BY case_id) h
+        JOIN chat_messages m ON m.case_id = h.case_id AND m.role = 'manager' AND m.created >= h.at
+        WHERE h.case_id NOT IN (SELECT value FROM json_each(?))
+        GROUP BY h.case_id''', (excluded,))]
+    agent_ms, manager_s = median(agent), median(manager)
+    return {'agent_reply_median_ms': None if agent_ms is None else round(agent_ms),
+            'agent_replies': len(agent),
+            'manager_reply_median_s': None if manager_s is None else round(manager_s),
+            'manager_replies': len(manager)}
 
 
 def deployment_app():

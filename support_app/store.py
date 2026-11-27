@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS webim_chats (
+    chat_id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id),
+    buttons TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS webim_seen (
+    message_id TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS reply_times (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id),
+    ms INTEGER NOT NULL,
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 
