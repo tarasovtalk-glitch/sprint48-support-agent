@@ -1,0 +1,14 @@
+{
+  "name": "sprint48-support-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Интерфейс агента поддержки Softline Store: свой экран чата и кабинет менеджера. Без зависимостей.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/serve.mjs",
+    "preview": "node scripts/serve.mjs --dist"
+  }
+}
