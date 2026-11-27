@@ -17,7 +17,7 @@ from typing import Literal
 from urllib.parse import quote as url_quote
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units, read_only
@@ -26,7 +26,8 @@ from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, obse
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .notify import Telegram
+from .notify import Telegram, in_background
+from .webim import WebimClient, button_id, parse_event
 from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
 from .scenario import load_scenario
 from .selection import catalog_router
@@ -167,6 +168,10 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     app = FastAPI(title='SMF Support', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     catalog_path = Path(os.environ.get('SUPPORT_CATALOG_DATABASE', database.with_name('catalog.sqlite3')))
+    webim = WebimClient(os.environ.get('WEBIM_BASE_URL', ''), os.environ.get('WEBIM_BOT_TOKEN', ''))
+    webim_secret = os.environ.get('WEBIM_WEBHOOK_SECRET', '')
+    webim_department = os.environ.get('WEBIM_DEP_KEY', '')
+    public_url = os.environ.get('SUPPORT_PUBLIC_URL', '').rstrip('/')
     telegram = Telegram(os.environ.get('TELEGRAM_BOT_TOKEN', ''), os.environ.get('TELEGRAM_CHAT_ID', ''),
                         os.environ.get('SUPPORT_CABINET_URL', ''))
     app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
@@ -366,6 +371,52 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 append_event(db, case_id, 'channel_result', f'{payload.channel}: {reply}')
             view = case_view(get_case(db, case_id))
         return {'reply': reply, 'intent': intent, 'document_url': document_url, 'case': view}
+
+    def webim_turn(chat_id: int, message_id: str, text: str, pressed: str | None):
+        """Одна реплика клиента из Webim: тот же ход агента, что в веб-чате, ответ — через Webim API."""
+        with store.connect(write=True) as db:
+            if message_id and db.execute('SELECT 1 FROM webim_seen WHERE message_id=?', (message_id,)).fetchone():
+                return  # Webim повторил доставку
+            if message_id:
+                db.execute('INSERT INTO webim_seen VALUES(?)', (message_id,))
+            row = db.execute('SELECT * FROM webim_chats WHERE chat_id=?', (chat_id,)).fetchone()
+            if row is None:
+                case_id = uuid4().hex
+                db.execute('INSERT INTO cases(id,client_hash,offer) VALUES(?,?,?)',
+                           (case_id, token_hash(secrets.token_urlsafe(32)), json.dumps(scenario.offer())))
+                append_event(db, case_id, 'opened', 'webim')
+                db.execute('INSERT INTO webim_chats(chat_id,case_id) VALUES(?,?)', (chat_id, case_id))
+                known = {}
+            else:
+                case_id, known = row['case_id'], json.loads(row['buttons'])
+            was_pending = get_case(db, case_id)['state'] == 'pending'
+        choice = known.get(pressed) if pressed else None
+        payload = Message(action=choice[0], value=choice[1]) if choice else Message(text=text or 'Позвать оператора')
+        try:
+            result = message(payload, case_id=case_id)
+        except Exception:  # сбой агента не оставляет клиента без ответа: чат — живому оператору
+            webim.redirect(chat_id, webim_department)
+            raise
+        webim.send_text(chat_id, result['reply'])
+        if result['buttons']:
+            webim.send_buttons(chat_id, result['buttons'])
+        if result['document_url'] and public_url:
+            webim.send_file(chat_id, public_url + result['document_url'], 'Документ Softline.pdf')
+        with store.connect(write=True) as db:
+            db.execute('UPDATE webim_chats SET buttons=? WHERE chat_id=?', (json.dumps(
+                {button_id(b['action'], b['value']): [b['action'], b['value']] for b in result['buttons']}), chat_id))
+        if not was_pending and result['case']['state'] == 'pending':
+            webim.redirect(chat_id, webim_department)  # дальше ведёт менеджер в Webim, сводка — в кабинете
+
+    @app.post(PREFIX + '/webim/{secret}')
+    def webim_event(secret: str, body: dict = Body(default={})):
+        if not chat_only or not webim.enabled or len(webim_secret) < 24 or not secrets.compare_digest(secret.encode(), webim_secret.encode()):
+            raise HTTPException(404)
+        event = parse_event(body)
+        if event:
+            in_background(webim_turn, *event)
+        return {'result': 'ok'}
+
 
     @app.get(PREFIX + '/documents/{access_id}')
     def document(access_id: str):
