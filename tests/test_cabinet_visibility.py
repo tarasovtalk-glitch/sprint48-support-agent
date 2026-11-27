@@ -57,6 +57,8 @@ def test_cabinet_shows_jury_examples_and_hides_confirmed_test_cases(tmp_path, mo
         assert client.get(prefix + '/agent/status', headers=manager).json()['state'] == 'paused'
         resumed = client.post(prefix + '/agent/pause', headers=manager, json={'paused': False})
         assert resumed.status_code == 200 and resumed.json()['state'] == 'on'
+        database.with_name('hidden-test-cases.json').write_text(json.dumps([test_case, real_case]), encoding='utf-8')
+        assert client.get(prefix + '/cases', headers=manager).json()['cases'] == []
 
 
 def test_jury_can_remember_answer_and_replay_without_affecting_other_keys(tmp_path, monkeypatch):

@@ -105,6 +105,17 @@ def get_case(db, case_id: str):
     return row
 
 
+def hidden_test_case_ids(path: Path) -> str:
+    try:
+        raw = path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return '[]'
+    ids = json.loads(raw)
+    if not isinstance(ids, list) or any(not isinstance(item, str) or not re.fullmatch(r'[a-f0-9]{32}', item) for item in ids):
+        raise ValueError('Invalid hidden test case configuration.')
+    return json.dumps(ids)
+
+
 def due_date(offer: dict) -> str:
     return (date.fromisoformat(offer['as_of']) + timedelta(days=offer['requested_days'])).isoformat()
 
@@ -122,12 +133,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     ):
         raise ValueError('Invalid cabinet access key configuration.')
     hidden_path = database.with_name('hidden-test-cases.json')
-    hidden_cases = json.loads(hidden_path.read_text(encoding='utf-8')) if hidden_path.is_file() else []
-    if not isinstance(hidden_cases, list) or any(
-        not isinstance(case_id, str) or not re.fullmatch(r'[a-f0-9]{32}', case_id) for case_id in hidden_cases
-    ):
-        raise ValueError('Invalid hidden test case configuration.')
-    hidden_ids = json.dumps(hidden_cases)
+    hidden_test_case_ids(hidden_path)
     jury_directory = TemporaryDirectory(prefix='support-jury-') if 'jury' in access_keys.values() else None
     jury_stores = {digest: create_jury_store(Path(jury_directory.name) / (digest + '.sqlite3'))
                    for digest, role in access_keys.items() if role == 'jury'} if jury_directory else {}
@@ -414,7 +420,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         today_iso = now_msk.date().isoformat()
         month_prefix = today_iso[:7]
         days_in_month = calendar.monthrange(now_msk.year, now_msk.month)[1]
-        excl = hidden_ids if reader is store else '[]'
+        excl = hidden_test_case_ids(hidden_path) if reader is store else '[]'
         with reader.connect() as db:
             cases = db.execute('''
                 SELECT COUNT(*) FROM cases
@@ -526,6 +532,10 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
               offset: int = Query(default=0, ge=0), reader: Store = Depends(cabinet_reader)):
+        excluded = hidden_test_case_ids(hidden_path) if reader is store else '[]'
+        return {'cases': list_cases(reader, state, limit, offset, excluded)}
+
+    def list_cases(reader: Store, state: str, limit: int, offset: int, excluded: str):
         with reader.connect() as db:
             rows = db.execute('''
                 SELECT c.*,
@@ -538,7 +548,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 WHERE (?='all' OR c.state='pending')
                   AND c.id NOT IN (SELECT value FROM json_each(?))
                 ORDER BY c.rowid DESC LIMIT ? OFFSET ?
-            ''', (state, hidden_ids if reader is store else '[]', limit, offset)).fetchall()
+            ''', (state, excluded, limit, offset)).fetchall()
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
@@ -550,7 +560,7 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                               'quote': context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None,
                               'created': row['created'], 'updated': row['last_message'] or row['created'],
                               'first_client_message': row['first_client_message']})
-            return {'cases': cases}
+            return cases
 
     @app.get(PREFIX + '/manager/cases/export.csv')
     def export_cases(day: str | None = Query(default=None), tz_offset: int = Query(default=180, ge=-720, le=840),
@@ -558,9 +568,10 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         """Выгрузка журнала обращений для разбора: причина, сводка, первая реплика. Открывается в Excel."""
         if day is not None and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
             raise HTTPException(422, 'Invalid day format, expected YYYY-MM-DD.')
+        excluded = hidden_test_case_ids(hidden_path) if reader is store else '[]'
         rows = []
         while len(rows) < 5000:   # постранично, не больше 5 000 обращений за выгрузку
-            page = queue(state='all', limit=100, offset=len(rows), reader=reader)['cases']
+            page = list_cases(reader, 'all', 100, len(rows), excluded)
             rows += page
             if len(page) < 100:
                 break
