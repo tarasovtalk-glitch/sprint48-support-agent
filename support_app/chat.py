@@ -24,7 +24,7 @@ REGISTRY_QUERY = re.compile(r'российск|отечествен|реестр
 EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжите с менеджером|тендер|госзакупк')
 TENDER = re.compile(r'\b(?:44|223)\s*[-‐‑–—]?\s*фз\b|тендер|госзакупк|\bкотировк|проект\w*\s+(?:контракт|договор)')
 DEFERRED_PAYMENT = re.compile(r'оплат\w*.{0,40}через\s+\d+\s+(?:дн|месяц)|отсроч\w*\s+на\s+\d+\s+(?:дн|месяц)')
-SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+ещ[её]|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
+SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+(?:ещ[её]|равно)|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
 INVOICE_REQUEST = re.compile(r'\b(?:выстав\w*|пришл\w*|сформируй\w*|нужен|хочу)\s+(?:\w+\s+){0,2}сч[её]т\b')
 KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
 ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
@@ -522,6 +522,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         # бот сам попросил детали по заказу — принимаем их в обращение, а не ищем товар по случайным словам
         append_event(db, row['id'], 'customer_details', 'order')
         return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
+    if (not action and state.get('post_purchase_reason') == 'order_question'
+            and re.search(r'\bключ\s+(?:ещ[её]\s+)?не\s+активировали\b', query)):
+        return 'Менеджер проверит условия по вашему заказу. ' + enter_queue(db, row, state, 'order_question'), []
     topic = support_topic(query) if text and not action and not QUOTE_REQUISITES.search(text) else None
     if topic:   # «купил КриптоПро, не активируется ключ» — вопрос по заказу, а не новая продажа
         answer, reason = topic
@@ -531,7 +534,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             state['post_purchase_reason'] = reason
         if EXTRA_PURCHASE.search(query):   # «…и ещё нужен Office на 5 мест» — вторую часть не теряем
             answer += 'Покупку из вашего сообщения посчитаю отдельно — напишите её следующим сообщением. '
-        if (already_helped and SUPPORT_TRIED.search(query)) or re.search(r'спам\w*.{0,25}проверен', query):
+        if already_helped and SUPPORT_TRIED.search(query):
+            return enter_queue(db, row, state, state.get('post_purchase_reason', 'order_question')), []
+        if re.search(r'спам\w*.{0,25}проверен', query):
             return answer + ' ' + enter_queue(db, row, state, state.get('post_purchase_reason', 'order_question')), []
         return answer, JOIN_MANAGER
     if (state.get('post_purchase') and text and not action and not is_closing(text)
