@@ -57,8 +57,10 @@ html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",R
   .slc-screen .slc-panel{left:auto;right:40px}
 }
 @media (max-width:760px){
-  .brand,.screen{display:none}
-  .slc-screen .slc-panel{left:0;right:0;top:0;bottom:0;width:auto;height:auto;border-radius:0;box-shadow:none}
+  .brand,.screen__head,.roles,.screen__actions .cta:not(.cta--quiet){display:none}
+  .screen{height:48px;min-height:0;justify-content:flex-end;padding:6px 16px}
+  .screen__actions .cta{padding:4px 12px;font-size:14px}
+  .slc-screen .slc-panel{left:0;right:0;top:48px;bottom:0;width:auto;height:auto;border-radius:0;box-shadow:none}
 }
 @media (prefers-reduced-motion:reduce){.screen__text>*{animation:none}.cta{transition:none}}
 </style>
@@ -81,19 +83,12 @@ html,body{margin:0;background:#fff;color:var(--ink);font-family:"SLChatRoboto",R
     </div>
     <div class="screen__actions">
       <a class="cta" href="cabinet/">Кабинет менеджера</a>
-      <a class="cta cta--quiet" href="site/" data-site hidden>Глазами клиента</a>
+      <a class="cta cta--quiet" href="site/">Глазами клиента</a>
     </div>
   </div>
 </main>
 <script src="config.js"></script>
 <script src="api.js"></script>
 <script src="chat/chat.js"></script>
-<script>
-// Копия главной страницы магазина с этим же чатом лежит только на локальном стенде (папка site/), в репозитории её нет:
-// кнопка появляется, только если копия на месте, иначе она вела бы в пустоту
-fetch('site/chat/site.js', { method: 'HEAD', cache: 'no-store' }).then(function (r) {
-  if (r.ok && /javascript/.test(r.headers.get('content-type') || '')) document.querySelector('[data-site]').hidden = false;
-}).catch(function () {});
-</script>
 </body>
 </html>
