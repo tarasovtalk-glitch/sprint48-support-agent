@@ -37,3 +37,11 @@ def test_cabinet_shows_jury_examples_and_hides_confirmed_test_cases(tmp_path, mo
         report = client.get(prefix + '/cases/export.csv', headers=manager).text
         assert real_case in report and test_case not in report
         assert client.get(prefix + '/cases/' + test_case + '/journal', headers=manager).status_code == 200
+        kb = client.get(prefix + '/knowledge', headers=manager).json()
+        assert len(kb['agent_rules']) >= 3 and len(kb['articles']) >= 10
+        metrics = client.get(prefix + '/metrics', headers=manager).json()
+        assert metrics['cases'] == 1 and metrics['handed_to_manager'] == 1
+        assert metrics['closed_by_agent'] == 0 and metrics['unfinished'] == 0
+        assert metrics['total_limit_rub'] > 0 and isinstance(metrics['daily_cost_rub'], dict)
+        jury_metrics = client.get(prefix + '/metrics', headers=jury).json()
+        assert jury_metrics['sample'] is True and jury_metrics['cases'] == 2 and jury_metrics['handed_to_manager'] == 2

@@ -131,15 +131,19 @@
       var ready = tab === 'today' ? loadToday()
         : tab === 'journal' ? Promise.all([loadToday(), load('journal', '/journal', SAMPLE.journal)])
         : tab === 'knowledge' ? load('knowledge', '/knowledge', SAMPLE.knowledge)
-        : DEMO ? Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)])
-        : load('metrics', '/agent/metrics');
+        : Promise.all([load('stats', '/agent/stats', SAMPLE.stats), load('settings', '/agent/settings', SAMPLE.settings)]);
       return ready.then(function (data) {
         if (version !== renderVersion) return;
-        var html = !data || (tab === 'journal' && !store.journal)
+        if (!DEMO && tab === 'agent' && store.stats) {
+          store.status = { state: store.stats.budget_exceeded ? 'limit' : 'on' };
+        }
+        var ok = tab === 'journal' ? !!store.journal
+          : tab === 'agent' ? !!(store.stats && store.settings)
+          : !!data;
+        var html = !ok
           ? '<p class="muted">Данные раздела пока недоступны.</p>'
           : tab === 'today' ? viewToday() : tab === 'journal' ? viewJournal()
-          : tab === 'knowledge' ? (DEMO ? viewKnowledge() : viewAnswers(data))
-          : DEMO ? viewAgent() : viewMetrics(data);
+          : tab === 'knowledge' ? viewKnowledge() : viewAgent();
         var fresh = ui.lastTab !== tab + ui.sub;
         ui.lastTab = tab + ui.sub;
         v.innerHTML = '<div class="' + (fresh ? 'view-in' : '') + '">' + html + '</div>';
@@ -202,8 +206,11 @@
     var n = queue().length, c = $('#todayCounter');
     c.hidden = !store.cases || ui.tab === 'today' || !n; c.textContent = n;
     var st = status().state, h;
-    // состояние агента сервер пока не отдаёт: с живым API переключатель паузы не показываем, чтобы не обещать того, чего нет
-    if (!DEMO) h = '';
+    if (!DEMO) {
+      h = !role ? '' : st === 'limit'
+        ? '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '</div>'
+        : '<div class="status status--plain">' + badge('success', 'Агент работает') + '</div>';
+    }
     else if (st === 'limit') h = '<div class="status status--plain">' + badge('danger', 'Лимит потрачен') + '<button class="btn btn--accent" type="button" data-act="limit">Поднять лимит</button></div>';
     else if (st === 'down') h = '<div class="status status--plain">' + badge('danger', 'Агент не отвечает, чаты ведут менеджеры') + '</div>';
     else if (st === 'paused') h = '<div class="status status--paused"><span>Агент на паузе</span><button class="switch switch--agent" type="button" role="switch" aria-checked="false" aria-label="Включить агента" data-act="resume"></button></div>';
@@ -498,12 +505,11 @@
     var match = function (x) { return !q || (x.title + ' ' + (x.meta || '') + ' ' + (x.text || '')).toLowerCase().indexOf(q) >= 0; };
     var rules = (k.rules || []).filter(match), arts = (k.articles || []).filter(match);
     var shownArts = ui.kAll || q ? arts : arts.slice(0, 5);
-    var left = '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2>' +
-      (pending.length + gaps.length + fixes.length ? '<div class="groups">' +
-        (pending.length ? kGroup('pending', 'Ответы для справки', pending.length, pending.map(function (p) { return plate('kpending', p); }).join('')) : '') +
-        (gaps.length ? kGroup('gaps', 'Темы без ответа', gaps.length, gaps.map(function (g) { return plate('kgap', g, g.share); }).join('')) : '') +
-        (fixes.length ? kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.map(function (f) { return plate('kfix', f); }).join('')) : '') + '</div>'
-        : '<p class="nothing">' + t('Всё разобрано: новых ответов, тем и поправок нет') + '</p>') + '</section>';
+    var left = '<section class="panel" aria-label="Ждёт менеджера"><h2 class="h2">Ждёт менеджера</h2><div class="groups">' +
+      kGroup('pending', 'Ответы для справки', pending.length, pending.length ? pending.map(function (p) { return plate('kpending', p); }).join('') : '<p class="nothing">Новых ответов нет</p>', pending.length > 0) +
+      kGroup('gaps', 'Темы без ответа', gaps.length, gaps.length ? gaps.map(function (g) { return plate('kgap', g, g.share); }).join('') : '<p class="nothing">Тем без ответа нет</p>', gaps.length > 0) +
+      kGroup('fixes', 'Поправки из проверок', fixes.length, fixes.length ? fixes.map(function (f) { return plate('kfix', f); }).join('') : '<p class="nothing">Поправок нет</p>', fixes.length > 0) +
+      '</div></section>';
     var right = '<section class="panel" aria-label="Что знает агент"><h2 class="h2">Что знает агент</h2>' +
       '<label class="search">' + IC.search + '<input class="field" type="search" data-act="ksearch" placeholder="Правило, статья или слово" aria-label="Поиск по знаниям агента" value="' + esc(ui.kQuery) + '"></label><div class="groups">' +
       kGroup('rules', 'Правила агента', rules.length, rules.length ? rules.map(function (r) { return plate('krule', r); }).join('') : '<p class="nothing">Правил не нашлось</p>') +
@@ -520,10 +526,12 @@
       '<a class="subtab' + (ui.sub === 'settings' ? ' is-active' : '') + '" href="#agent/settings"' + (ui.sub === 'settings' ? ' aria-current="page"' : '') + '>Настройки</a></nav>' +
       (ui.sub === 'settings' ? viewSettings() : viewWork()) + '</div>';
   }
+  function spendMoney(n) { return n > 0 && n < 10 ? rub2(n) : money(n); }
   function spend() {
     var s = store.stats || {}, past = (s.days || []).reduce(function (a, b) { return a + b; }, 0);
-    var spent = status().state === 'limit' ? (store.settings || {}).limit_rub || 0 : Math.round(past + (s.today_rub || 0));
-    var forecast = Math.round(past + (s.today_rub || 0) + (s.forecast_rub || 0) * ((s.days_in_month || 30) - (s.today_day || 1)));
+    var spent = status().state === 'limit' ? (store.settings || {}).limit_rub || 0
+      : s.spent_rub != null ? s.spent_rub : Math.round(past + (s.today_rub || 0));
+    var forecast = spent + (s.forecast_rub || 0) * Math.max(0, (s.days_in_month || 30) - (s.today_day || 1));
     return { spent: spent, forecast: forecast };
   }
   function benefit() {
@@ -535,17 +543,20 @@
   function viewWork() {
     var s = store.stats || {}, set = store.settings || {}, r = s.requests || {}, sp = spend(), limit = set.limit_rub || 0, warn = set.warn_rub || 0;
     var pct = function (n) { return r.total ? Math.round(n / r.total * 100) : 0; };
+    var splitBars = r.total
+      ? '<span style="flex:' + r.closed + ';background:var(--success)"></span><span style="flex:' + r.handed + ';background:var(--accent);animation-delay:60ms"></span><span style="flex:' + r.unfinished + ';background:var(--icon);animation-delay:120ms"></span>'
+      : '<span style="flex:1;background:var(--line)"></span>';
     var left = '<section class="panel"><h2 class="h2">Обращения ' + esc(s.month_in || '') + '</h2>' +
       '<div class="total"><span class="num">' + group3(r.total || 0) + '</span><span class="muted">' + t('обращений, сегодня ' + (r.today || 0)) + '</span></div>' +
       '<div class="split" role="img" aria-label="' + esc('Закрыл сам ' + pct(r.closed) + '%, передал менеджерам ' + pct(r.handed) + '%, не закончили ' + pct(r.unfinished) + '%') + '">' +
-      '<span style="flex:' + r.closed + ';background:var(--success)"></span><span style="flex:' + r.handed + ';background:var(--accent);animation-delay:60ms"></span><span style="flex:' + r.unfinished + ';background:var(--icon);animation-delay:120ms"></span></div>' +
-      '<div class="split__legend">' + [['success', 'Закрыл сам', r.closed], ['accent', 'Передал менеджерам', r.handed], ['neutral', 'Не закончили', r.unfinished]].map(function (x) {
+      splitBars + '</div>' +
+      '<div class="split__legend">' + [['success', 'Закрыл сам', r.closed || 0], ['accent', 'Передал менеджерам', r.handed || 0], ['neutral', 'Не закончили', r.unfinished || 0]].map(function (x) {
         return '<div class="split__item">' + badge(x[0], x[1]) + '<span><b>' + pct(x[2]) + '%</b> <span class="muted">' + group3(x[2]) + '</span></span></div>';
       }).join('') + '</div>' + facts(s.speed || []) + '<p class="panel__note">' + t(s.speed_note || '') + '</p></section>';
     left += '<section class="panel"><h2 class="h2">Расходы на агента, ' + esc(s.month || '') + '</h2>' +
-      '<div class="spend-head"><span class="total"><span class="num">' + money(sp.spent) + '</span><span class="muted">' + t('из лимита ' + money(limit)) + '</span></span>' +
-      '<span class="muted">' + t('к ' + (s.days_in_month || 30) + ' ' + MONTHS[s.month_index || 10] + ' около ' + money(sp.forecast)) + '</span></div>' +
-      '<div><div class="meter" role="img" aria-label="' + esc('Потрачено ' + money(sp.spent) + ' из ' + money(limit)) + '"><span class="meter__fill" style="width:' + Math.min(100, limit ? sp.spent / limit * 100 : 0) + '%"></span>' +
+      '<div class="spend-head"><span class="total"><span class="num">' + spendMoney(sp.spent) + '</span><span class="muted">' + t('из лимита ' + money(limit)) + '</span></span>' +
+      '<span class="muted">' + t('к ' + (s.days_in_month || 30) + ' ' + MONTHS[s.month_index || 10] + ' около ' + spendMoney(sp.forecast)) + '</span></div>' +
+      '<div><div class="meter" role="img" aria-label="' + esc('Потрачено ' + spendMoney(sp.spent) + ' из ' + money(limit)) + '"><span class="meter__fill" style="width:' + Math.min(100, limit ? sp.spent / limit * 100 : 0) + '%"></span>' +
       (warn && limit ? '<span class="meter__mark" style="left:calc(' + (warn / limit * 100) + '% - 1px)"></span>' : '') + '</div>' +
       (warn && limit ? '<div class="meter__caption"><span style="left:' + (warn / limit * 100) + '%">' + t('предупреждение при ' + money(warn)) + '</span></div>' : '') + '</div>' +
       chart(s) + facts(s.spend_facts || []) + '<a class="link" href="#agent/settings">Лимит и предупреждение в настройках</a></section>';
@@ -598,30 +609,30 @@
   }
 
   function viewSettings() {
-    var s = store.settings || {};
+    var s = store.settings || {}, ro = !!s.readonly || store.role === 'jury', dis = ro ? ' disabled' : '';
     var warnBad = s.warn_rub >= s.limit_rub;
     var limit = '<section class="panel"><h2 class="h2">Лимит на работу агента</h2><div class="fields">' +
-      '<label class="label"><span class="label__text">Лимит в месяц, ₽</span><input class="field" inputmode="numeric" data-set="limit_rub" value="' + esc(group3(s.limit_rub)) + '"></label>' +
-      '<label class="label"><span class="label__text">Предупредить при, ₽</span><input class="field' + (warnBad ? ' is-error' : '') + '" inputmode="numeric" data-set="warn_rub" value="' + esc(group3(s.warn_rub)) + '"' + (warnBad ? ' aria-invalid="true" aria-describedby="warnErr"' : '') + '></label></div>' +
+      '<label class="label"><span class="label__text">Лимит в месяц, ₽</span><input class="field" inputmode="numeric" data-set="limit_rub" value="' + esc(group3(s.limit_rub)) + '"' + dis + '></label>' +
+      '<label class="label"><span class="label__text">Предупредить при, ₽</span><input class="field' + (warnBad ? ' is-error' : '') + '" inputmode="numeric" data-set="warn_rub" value="' + esc(group3(s.warn_rub)) + '"' + (warnBad ? ' aria-invalid="true" aria-describedby="warnErr"' : '') + dis + '></label></div>' +
       (warnBad ? '<p class="error-text" id="warnErr">Предупреждение должно быть меньше лимита</p>' : '') +
       '<p>' + rich('Когда лимит потрачен, агент **молчит до 1-го числа**, чаты идут менеджерам.\nО пороге менеджеры узнают **в кабинете' + (s.notify ? ' и уведомлением' : '') + '**.') + '</p></section>';
     var hours = '<section class="panel"><h2 class="h2">Срок ответа и часы менеджеров</h2><div class="fields fields--hours">' +
-      '<label class="label"><span class="label__text">Ответ менеджера обещаем через, мин</span><input class="field" inputmode="numeric" data-set="answer_min" value="' + esc(s.answer_min) + '"></label>' +
+      '<label class="label"><span class="label__text">Ответ менеджера обещаем через, мин</span><input class="field" inputmode="numeric" data-set="answer_min" value="' + esc(s.answer_min) + '"' + dis + '></label>' +
       '<div class="label"><span class="label__text" id="hoursLabel">Часы менеджеров, по Москве</span><div class="hours" role="group" aria-labelledby="hoursLabel">' +
-      '<button class="select" type="button" data-act="set-days" aria-haspopup="menu" aria-expanded="false" aria-label="Дни: ' + esc(s.days) + '">' + esc(s.days) + IC.chev + '</button>' +
-      '<button class="select" type="button" data-act="set-from" aria-haspopup="menu" aria-expanded="false" aria-label="С ' + esc(s.from) + '">' + esc(s.from) + IC.chev + '</button><span class="muted" aria-hidden="true">–</span>' +
-      '<button class="select" type="button" data-act="set-to" aria-haspopup="menu" aria-expanded="false" aria-label="До ' + esc(s.to) + '">' + esc(s.to) + IC.chev + '</button></div></div></div>' +
+      '<button class="select" type="button" data-act="set-days" aria-haspopup="menu" aria-expanded="false" aria-label="Дни: ' + esc(s.days) + '"' + dis + '>' + esc(s.days) + IC.chev + '</button>' +
+      '<button class="select" type="button" data-act="set-from" aria-haspopup="menu" aria-expanded="false" aria-label="С ' + esc(s.from) + '"' + dis + '>' + esc(s.from) + IC.chev + '</button><span class="muted" aria-hidden="true">–</span>' +
+      '<button class="select" type="button" data-act="set-to" aria-haspopup="menu" aria-expanded="false" aria-label="До ' + esc(s.to) + '"' + dis + '>' + esc(s.to) + IC.chev + '</button></div></div></div>' +
       '<p>' + rich('Этот срок агент **называет клиенту**, когда передаёт вопрос менеджеру.\nВечером и в выходные обещает ответ **до ' + hmOf(mins(s.from) + 60) + ' рабочего дня**.') + '</p></section>';
-    var notify = '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2" id="notifyTitle">Уведомления менеджерам</h2><button class="switch" type="button" role="switch" aria-checked="' + !!s.notify + '" aria-labelledby="notifyTitle" data-act="notify"></button></div>' +
+    var notify = '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2" id="notifyTitle">Уведомления менеджерам</h2><button class="switch" type="button" role="switch" aria-checked="' + !!s.notify + '" aria-labelledby="notifyTitle" data-act="notify"' + dis + '></button></div>' +
       '<p class="muted" style="margin-top:-8px">' + t('Пишем менеджеру, когда агент передаёт ему разговор') + '</p>' +
       '<div class="options options--2' + (s.notify ? '' : ' is-off') + '" role="radiogroup" aria-label="Куда писать">' + (s.channels || []).map(function (ch) {
         if (ch.off) return '<div class="option option--off" aria-disabled="true"><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></div>';
         var on = s.channel === ch.id;
-        return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="channel" data-id="' + esc(ch.id) + '"' + (s.notify ? '' : ' disabled') + '><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></button>';
+        return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="channel" data-id="' + esc(ch.id) + '"' + (s.notify && !ro ? '' : ' disabled') + '><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></button>';
       }).join('') + '</div><p>' + rich(s.notify ? 'Уведомления **бесплатные** и лимит не тратят.' : 'Уведомления выключены: о новых разговорах менеджеры узнают **только в кабинете**.') + '</p></section>';
     var model = '<section class="panel"><h2 class="h2">Модель</h2><div class="options options--3" role="radiogroup" aria-label="Модель агента">' + (s.models || []).map(function (m) {
       var on = s.model === m.id;
-      return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="model" data-id="' + esc(m.id) + '"><b>' + t(m.name) + '</b><span>' + t(m.cost) + '</span></button>';
+      return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="model" data-id="' + esc(m.id) + '"' + dis + '><b>' + t(m.name) + '</b><span>' + t(m.cost) + '</span></button>';
     }).join('') + '</div><p>' + rich('Модель **меняется сразу**: следующие обращения агент разберёт уже на ней.') + '</p><p class="panel__note">' + t(s.model_note || '') + '</p></section>';
     return '<div class="settings-cols">' + limit + hours + notify + model + '</div>';
   }
@@ -1090,6 +1101,14 @@
   function textDialog(list, id, title, okText, done) {
     var k = kStore(), x = byId(k[list], id); if (!x) return;
     var isRule = list === 'rules';
+    if (!DEMO && (k.readonly || store.role === 'jury')) {
+      openDialog({
+        title: isRule ? title : x.title,
+        text: (isRule ? x.title + (x.meta ? '\n' + x.meta : '') : (x.text || x.meta || '') + (x.text && x.meta ? '\n\n' + x.meta : '')),
+        cancel: 'Закрыть'
+      });
+      return;
+    }
     openDialog({ title: title, text: isRule ? x.meta : x.title + '. ' + x.meta + '.',
       body: '<textarea class="field" rows="' + (isRule ? 3 : 5) + '" data-dlg="text" placeholder="' + (isRule ? '' : 'Текст статьи, по нему отвечает агент') + '" aria-label="' + esc(title) + '">' + esc(isRule ? x.title : x.text || '') + '</textarea>', ok: okText,
       onOk: function () {

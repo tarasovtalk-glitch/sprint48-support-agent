@@ -1,3 +1,4 @@
+import calendar
 import hashlib
 import hmac
 import ipaddress
@@ -7,8 +8,8 @@ import re
 import secrets
 import sqlite3
 import time
-from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from contextlib import asynccontextmanager, closing
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
@@ -18,8 +19,8 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
-from .catalog import purchasable_units
-from .knowledge import all_answers, question_for, save_answer
+from .catalog import purchasable_units, read_only
+from .knowledge import AGENT_RULES, BUILT_IN_ARTICLES, all_answers, question_for, save_answer
 from .chat import buttons, customer_text, intent_cues, lookup, run_turn, tool_request
 from .summary import cases_csv, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
@@ -340,16 +341,119 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
 
     @app.get(PREFIX + '/manager/metrics')
     def manager_metrics(reader: Store = Depends(cabinet_reader)):
+        msk = timezone(timedelta(hours=3))
+        now_msk = datetime.now(msk)
+        today_iso = now_msk.date().isoformat()
+        month_prefix = today_iso[:7]
+        days_in_month = calendar.monthrange(now_msk.year, now_msk.month)[1]
+        excl = hidden_ids if reader is store else '[]'
         with reader.connect() as db:
-            cases = db.execute('SELECT COUNT(*) FROM cases').fetchone()[0]
+            cases = db.execute('''
+                SELECT COUNT(*) FROM cases
+                WHERE id NOT IN (SELECT value FROM json_each(?))
+            ''', (excl,)).fetchone()[0]
+            today_cases = db.execute('''
+                SELECT COUNT(*) FROM cases c
+                WHERE c.id NOT IN (SELECT value FROM json_each(?))
+                  AND date(datetime(COALESCE(
+                      (SELECT j.created FROM journal j WHERE j.case_id=c.id AND j.event='opened' ORDER BY j.id LIMIT 1),
+                      (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id LIMIT 1),
+                      CURRENT_TIMESTAMP
+                  ), '+3 hours')) = ?
+            ''', (excl, today_iso)).fetchone()[0]
+            handed = db.execute('''
+                SELECT COUNT(*) FROM cases c
+                WHERE c.id NOT IN (SELECT value FROM json_each(?))
+                  AND (c.state IN ('pending', 'approved', 'rejected')
+                       OR EXISTS (SELECT 1 FROM journal j WHERE j.case_id=c.id AND j.event='sent_to_manager'))
+            ''', (excl,)).fetchone()[0]
+            closed = db.execute('''
+                SELECT COUNT(*) FROM cases c
+                WHERE c.id NOT IN (SELECT value FROM json_each(?))
+                  AND c.state = 'open'
+                  AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.case_id=c.id AND j.event='sent_to_manager')
+                  AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.case_id=c.id AND m.role='client')
+            ''', (excl,)).fetchone()[0]
+            unfinished = max(0, cases - handed - closed)
             calls, input_tokens, output_tokens, cost = db.execute('''
                 SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
                        COALESCE(SUM(cost_microrubles), 0)
                 FROM model_usage WHERE input_tokens IS NOT NULL
             ''').fetchone()
-        return {'cases': cases, 'model_calls': calls, 'input_tokens': input_tokens,
-                'output_tokens': output_tokens, 'cost_microrubles': cost,
-                'sample': reader is jury_store}
+            today_tokens, today_cost = db.execute('''
+                SELECT COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0),
+                       COALESCE(SUM(cost_microrubles), 0)
+                FROM model_usage WHERE day = ? AND input_tokens IS NOT NULL
+            ''', (today_iso,)).fetchone()
+            daily_rows = db.execute('''
+                SELECT day, COALESCE(SUM(cost_microrubles), 0) AS cost
+                FROM model_usage
+                WHERE day LIKE ? AND input_tokens IS NOT NULL
+                GROUP BY day
+            ''', (month_prefix + '-%',)).fetchall()
+            daily_cost_rub = {}
+            for row in daily_rows:
+                try:
+                    d_num = int(row['day'].split('-')[2])
+                    daily_cost_rub[d_num] = round(row['cost'] / 1_000_000, 4)
+                except (IndexError, ValueError):
+                    pass
+            outages = db.execute('''
+                SELECT COUNT(*) FROM journal
+                WHERE event IN ('model_unavailable', 'model_budget_exceeded')
+                  AND substr(datetime(created, '+3 hours'), 1, 7) = ?
+                  AND case_id NOT IN (SELECT value FROM json_each(?))
+            ''', (month_prefix, excl)).fetchone()[0]
+            reason_rows = db.execute('''
+                SELECT COALESCE(NULLIF(detail, ''), 'needs_manager') AS code, COUNT(DISTINCT case_id) AS cnt
+                FROM journal
+                WHERE event = 'sent_to_manager'
+                  AND case_id NOT IN (SELECT value FROM json_each(?))
+                GROUP BY code
+                ORDER BY cnt DESC, code ASC
+            ''', (excl,)).fetchall()
+            reasons = [
+                {'code': r['code'], 'title': reason_text(r['code']) or 'Передано менеджеру', 'count': r['cnt']}
+                for r in reason_rows
+            ]
+        catalog_info = None
+        if catalog_path.is_file():
+            try:
+                with closing(read_only(catalog_path)) as cat_db:
+                    meta = {r['name']: r['value'] for r in cat_db.execute('SELECT name, value FROM metadata')}
+                    offers = cat_db.execute('SELECT COUNT(*) FROM products').fetchone()[0]
+                    available = cat_db.execute('SELECT COUNT(*) FROM products WHERE available=1').fetchone()[0]
+                    priced_available = cat_db.execute(
+                        'SELECT COUNT(*) FROM products WHERE available=1 AND price_kopecks > 0'
+                    ).fetchone()[0]
+                catalog_info = {
+                    'source_date': meta.get('source_date', ''),
+                    'loaded_at': meta.get('loaded_at', ''),
+                    'offers': offers,
+                    'available': available,
+                    'priced_available': priced_available,
+                }
+            except sqlite3.Error:
+                catalog_info = None
+        return {
+            'cases': cases, 'today_cases': today_cases,
+            'closed_by_agent': closed, 'handed_to_manager': handed, 'unfinished': unfinished,
+            'model_calls': calls, 'input_tokens': input_tokens,
+            'output_tokens': output_tokens, 'cost_microrubles': cost,
+            'today_tokens': today_tokens, 'today_cost_rub': round(today_cost / 1_000_000, 4),
+            'daily_cost_rub': daily_cost_rub,
+            'daily_limit_rub': round(daily_limit / 1_000_000, 2),
+            'total_limit_rub': round(total_limit / 1_000_000, 2),
+            'budget_exceeded': cost >= total_limit or today_cost >= daily_limit,
+            'server_rub': 370,
+            'model_configured': bool(model_key and model_uri),
+            'model_name': 'Alice AI LLM Flash',
+            'outages': outages,
+            'reasons': reasons,
+            'catalog': catalog_info,
+            'year': now_msk.year, 'month': now_msk.month, 'day': now_msk.day, 'days_in_month': days_in_month,
+            'sample': reader is jury_store,
+        }
 
     @app.get(PREFIX + '/manager/cases')
     def queue(state: Literal['pending', 'all'] = 'pending', limit: int = Query(default=50, ge=1, le=100),
@@ -501,7 +605,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         with reader.connect() as db:
             rows = db.execute('SELECT * FROM rules ORDER BY rowid DESC LIMIT 50').fetchall()
             answers = all_answers(db)
-        return {'rules': [dict(row) for row in rows], 'answers': answers}
+        return {'rules': [dict(row) for row in rows], 'answers': answers,
+                'agent_rules': AGENT_RULES, 'articles': BUILT_IN_ARTICLES}
 
     @app.get(PREFIX + '/manager/cases/{case_id}/journal')
     def journal(case_id: str, reader: Store = Depends(cabinet_reader)):

@@ -328,6 +328,20 @@ def registry_selection(db, req):
     return matches
 
 
+def next_clarify_field(state: dict) -> str:
+    if state.get('flow') == 'needs' and not state.get('focus') and not state.get('focus_asked'):
+        return 'focus'
+    if state.get('flow') == 'mdaemon' and not state.get('quantity'):
+        return 'users'
+    if not state.get('term') and not state.get('term_asked'):
+        return 'term'
+    if not state.get('deployment') and not state.get('deployment_asked') and state.get('flow') != 'mdaemon':
+        return 'deployment'
+    if not state.get('quantity'):
+        return 'users'
+    return ''
+
+
 def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     if not catalog.is_file():
         return 'Каталог ещё недоступен. Могу позвать оператора.', JOIN_MANAGER
@@ -603,7 +617,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         append_event(db, row['id'], 'requirements_understood', 'software_protection')
         state.update(flow='needs', query=text)
         if tool == 'clarify_requirements':
-            append_event(db, row['id'], 'model_tool_executed', tool)
+            field = next_clarify_field(state)
+            append_event(db, row['id'], 'model_tool_executed', f'{tool}:{field}' if field else tool)
             return collect_selection(state, catalog, db, row['id'])
     if state.get('flow') == 'cryptopro' and not state.get('offer_id') and action != 'placement' and not re.search(r'сервер', query) and (
             re.search(r'\d+\s*мест|рабоч\w*\s+мест|рабоч\w*\s+станц', query)

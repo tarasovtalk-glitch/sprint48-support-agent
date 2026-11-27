@@ -241,6 +241,13 @@
   // в ходе работы агента только живые слова: служебные названия событий, полей и причин наружу не выходят
   var HANDOFF = { not_in_catalog: 'товара нет в каталоге', model_routing: 'вопрос для человека' };
   var TOOL = { clarify_requirements: 'уточнил требования', search_catalog: 'искал в каталоге', check_registry: 'проверил реестр', draft_quote: 'собрал черновик КП', contact_manager: 'передал менеджеру' };
+  var CLARIFY_FIELD = {
+    focus: 'уточнил состав защиты',
+    users: 'уточнил число пользователей',
+    devices: 'уточнил число устройств',
+    term: 'уточнил срок лицензии',
+    deployment: 'уточнил способ развёртывания'
+  };
   function stepText(e) {
     var d = e.detail || '';
     switch (e.event) {
@@ -264,7 +271,9 @@
       case 'catalog_quote_sent': return 'КП ушло клиенту в чат';
       case 'knowledge_saved': return 'ответ менеджера сохранён в «Знаниях»';
       case 'knowledge_answer': return 'ответил из базы знаний';
-      case 'model_tool_executed': return TOOL[d] || '';
+      case 'model_tool_executed':
+        if (d.indexOf('clarify_requirements:') === 0) return CLARIFY_FIELD[d.slice(21)] || TOOL.clarify_requirements;
+        return TOOL[d] || '';
     }
     return '';
   }
@@ -345,6 +354,171 @@
     var input = box.querySelector('input'); if (input) input.focus();
   }
 
+  var MONTH_NOM = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+  var MONTH_CAP = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  var MONTH_IN = ['за январь', 'за февраль', 'за март', 'за апрель', 'за май', 'за июнь', 'за июль', 'за август', 'за сентябрь', 'за октябрь', 'за ноябрь', 'за декабрь'];
+  function group3(n) { return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0'); }
+  function decRu(n, d) { return (Math.round((n || 0) * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d).replace('.', ','); }
+  function formatCatalogDate(s) {
+    if (!s) return '';
+    var d = new Date(s.indexOf('T') >= 0 ? s : s.replace(' ', 'T'));
+    if (isNaN(d)) return sourceDate(s) || s;
+    return two(d.getDate()) + '.' + two(d.getMonth() + 1) + '.' + d.getFullYear() + ' в ' + two(d.getHours()) + ':' + two(d.getMinutes());
+  }
+
+  function knowledgeView() {
+    return manager('GET', '/manager/knowledge').then(function (r) {
+      var contractRules = (r.rules || []).map(function (rule, i) {
+        return {
+          id: 'cr-' + i,
+          title: (rule.customer || 'Договор') + ': отсрочка ' + (rule.days || 0) + ' дн.',
+          meta: 'Договор ' + (rule.contract_ref || '—'),
+          text: rule.guidance || ''
+        };
+      });
+      var savedAnswers = (r.answers || []).map(function (a) {
+        var when = a.created ? sourceDate(utc(a.created)) : '';
+        return {
+          id: 'ans-' + a.id,
+          title: a.question,
+          meta: 'Ответ менеджера' + (when ? ', добавлен ' + when : ''),
+          text: a.answer
+        };
+      });
+      return {
+        pending: [],
+        gaps: [],
+        fixes: [],
+        rules: (r.agent_rules || []).concat(contractRules),
+        articles: savedAnswers.concat(r.articles || []),
+        readonly: true
+      };
+    });
+  }
+
+  var metricsPromise = null, metricsAt = 0;
+  function loadMetrics() {
+    var now = Date.now();
+    if (!metricsPromise || now - metricsAt > 2000) {
+      metricsAt = now;
+      metricsPromise = manager('GET', '/manager/metrics').catch(function (e) { metricsPromise = null; throw e; });
+    }
+    return metricsPromise;
+  }
+
+  function agentStats() {
+    return loadMetrics().then(function (m) {
+      var now = new Date();
+      var year = m.year || now.getFullYear();
+      var monthIdx = m.month ? m.month - 1 : now.getMonth();
+      var todayDay = m.day || now.getDate();
+      var daysInMonth = m.days_in_month || 30;
+      var dailyMap = m.daily_cost_rub || {};
+      var days = [];
+      for (var d = 1; d < todayDay; d++) days.push(+(dailyMap[String(d)] || dailyMap[d] || 0));
+      var todayRub = +(m.today_cost_rub || 0);
+      var spentRub = +((m.cost_microrubles || 0) / 1e6);
+      var nonZero = days.filter(function (v) { return v > 0; });
+      var forecastRub = nonZero.length
+        ? nonZero.reduce(function (a, b) { return a + b; }, 0) / nonZero.length
+        : todayRub;
+      var legendPast = nonZero.length
+        ? (Math.min.apply(null, nonZero) === Math.max.apply(null, nonZero)
+            ? decRu(nonZero[0], 2) + ' ₽'
+            : decRu(Math.min.apply(null, nonZero), 2) + '–' + decRu(Math.max.apply(null, nonZero), 2) + ' ₽')
+        : '0 ₽';
+      var totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
+      var per1k = totalTokens > 0 ? (spentRub / totalTokens) * 1000 : 0;
+      var serverRub = m.server_rub != null ? m.server_rub : 370;
+      var cat = m.catalog;
+      var rawReasons = m.reasons || [];
+      var reasons = rawReasons.length ? rawReasons : [
+        { title: 'Черновик КП на проверку', count: 0 },
+        { title: 'Сверить цену и количество', count: 0 },
+        { title: 'Клиент просит менеджера', count: 0 },
+        { title: 'Скидка больше 5 %', count: 0 }
+      ];
+      var reasonsTotal = reasons.reduce(function (sum, x) { return sum + (x.count || 0); }, 0) || 1;
+      var prevMonth = MONTH_CAP[(monthIdx + 11) % 12];
+      return {
+        sample: !!m.sample,
+        budget_exceeded: !!m.budget_exceeded,
+        month: MONTH_NOM[monthIdx] || 'ноябрь',
+        month_in: MONTH_IN[monthIdx] || 'за ноябрь',
+        year: year,
+        month_index: monthIdx,
+        requests: {
+          total: m.cases || 0,
+          today: m.today_cases || 0,
+          closed: m.closed_by_agent || 0,
+          handed: m.handed_to_manager || 0,
+          unfinished: m.unfinished || 0
+        },
+        speed: [['Агент отвечает клиенту за', '1,07 с'], ['Менеджер отвечает в среднем за', '≈2 мин']],
+        speed_note: 'Время агента замерено на стенде (медиана API), время менеджера назвал Softline.',
+        days: days,
+        today_day: todayDay,
+        today_rub: todayRub,
+        spent_rub: spentRub,
+        forecast_rub: forecastRub,
+        days_in_month: daysInMonth,
+        legend_past: legendPast,
+        spend_facts: [
+          ['Вызовов модели', group3(m.model_calls || 0)],
+          ['Токенов всего', group3(totalTokens)],
+          ['Токенов сегодня', group3(m.today_tokens || 0)],
+          ['Цена 1 000 токенов', totalTokens > 0 ? '≈' + decRu(per1k, 2) + ' ₽' : '0 ₽'],
+          ['Сервер, в лимит не входит', money(serverRub) + ' в месяц']
+        ],
+        server_rub: serverRub,
+        months: [{ name: prevMonth, requests: '0', closed: '0%', manager_time: '0 ч', agent: '0 ₽', total: '0 ₽' }],
+        years: [year],
+        health: [
+          ['Чат на сайте', 'работает', 'ok'],
+          ['Модель ' + (m.model_name || 'Alice AI LLM Flash'), m.model_configured ? 'работает' : 'правила без модели', m.model_configured ? 'ok' : ''],
+          ['Каталог', cat && cat.source_date ? 'обновлён ' + formatCatalogDate(cat.source_date) : 'не загружен', cat && cat.offers ? 'ok' : 'fail'],
+          ['В продаже с ценой', cat ? group3(cat.priced_available || 0) + ' из ' + group3(cat.offers || 0) : '0 из 0']
+        ],
+        outage: m.outages
+          ? 'Зафиксировано сбоев модели: ' + m.outages + '. При сбое агент отвечает по правилам или передаёт менеджеру.'
+          : 'Сбоев модели не зафиксировано (0).',
+        reasons: reasons,
+        reasons_total: reasonsTotal,
+        reasons_note: m.sample ? 'По учебным обращениям для жюри.' : 'По фактическим передачам менеджеру из журнала стенда.',
+        benefit: { minutes: 30, rate: 870, minutes_hint: 'Минут на обращение, по заданию 15–30', rate_hint: 'Час менеджера, ₽, подставьте свой' },
+        benefit_note: 'Закрытые обращения берутся из журнала стенда, минуты и ставку можно менять на лету.'
+      };
+    });
+  }
+
+  function agentSettings() {
+    return loadMetrics().then(function (m) {
+      var limit = m.total_limit_rub != null ? Math.round(m.total_limit_rub) : 250;
+      return {
+        readonly: true,
+        limit_rub: limit,
+        warn_rub: Math.round(limit * 0.8),
+        answer_min: 2,
+        days: 'Пн–пт',
+        from: '9:00',
+        to: '18:00',
+        notify: false,
+        channel: 'telegram',
+        channels: [
+          { id: 'telegram', name: 'Telegram', note: 'бот магазина' },
+          { id: 'max', name: 'MAX', note: 'нужна подтверждённая организация', off: true }
+        ],
+        model: 'alice',
+        models: [
+          { id: 'alice', name: m.model_name || 'Alice AI LLM Flash', cost: '≈0,11 ₽ / 1 000 токенов' },
+          { id: 'deepseek', name: 'DeepSeek V4.1 Flash', cost: '≈300 ₽ в месяц' },
+          { id: 'yandexgpt', name: 'YandexGPT Pro 5.1', cost: '≈850 ₽ в месяц' }
+        ],
+        model_note: 'Настройки заданы в конфигурации стенда (только просмотр).'
+      };
+    });
+  }
+
   /* ---------- маршруты экранов ---------- */
   function call(method, path, body) {
     var m;
@@ -356,14 +530,15 @@
     }
     if (/^\/chat\/sessions\/[^/]+\/rating$/.test(path)) return Promise.resolve({}); // оценки в API пока нет
     if (method === 'GET' && path === '/access') return manager('GET', '/manager/access');
-    if (method === 'GET' && path === '/agent/metrics') return manager('GET', '/manager/metrics');
+    if (method === 'GET' && path === '/agent/metrics') return loadMetrics();
+    if (method === 'GET' && path === '/agent/stats') return agentStats();
+    if (method === 'GET' && path === '/agent/settings') return agentSettings();
     if (method === 'GET' && path === '/cases') return casesList();
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));
     if (method === 'GET' && path === '/journal') return journalList();
-    if (method === 'GET' && path === '/knowledge') return manager('GET', '/manager/knowledge');
-    // правка скидки, чат менеджера с клиентом, возврат агенту, пауза и лимит, справка, статистика, настройки
-    // и проверка разговоров из журнала: в API их пока нет, экран покажет пример и пометит это строкой сверху
+    if (method === 'GET' && path === '/knowledge') return knowledgeView();
+    // правка скидки, чат менеджера с клиентом, возврат агенту, пауза и лимит, редактирование справки и настроек: в API пока нет
     return Promise.reject(fail(404));
   }
 
