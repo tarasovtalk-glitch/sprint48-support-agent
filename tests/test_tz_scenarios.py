@@ -14,6 +14,19 @@ def test_cryptopro_19_workstations_quote(chat):
     assert '70 300 ₽' in r['reply'] and chat.state == 'pending'
 
 
+def test_invoice_request_provides_one_draft_before_manager_review(chat, client):
+    chat.say('Нужно выставить счёт на 19 бессрочных лицензий КриптоПро')
+    chat.say(action='placement', value='workstation')
+    draft = chat.say(REQ)
+    assert draft['case']['state'] == 'pending' and 'Черновик счёта' in draft['reply']
+    assert draft['messages'][-1]['document_url'] == draft['document_url']
+    pdf = client.get(draft['document_url'])
+    assert pdf.status_code == 200 and pdf.content.startswith(b'%PDF')
+    assert 'invoice.pdf' in pdf.headers['content-disposition']
+    again = chat.say('Продублируйте, пожалуйста')
+    assert not again.get('document_url')
+
+
 def test_cryptopro_text_computer_and_44fz_tender(client):
     from eval.local import Chat
     c1 = Chat(client)

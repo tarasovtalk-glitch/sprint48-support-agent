@@ -45,17 +45,20 @@ def render_pdf(kind: str, offer: dict, font_path: Path) -> bytes:
 
 
 def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path, *, approved=False, inn='', kpp='',
-                         discount: int = 0, items: list | None = None) -> bytes:
+                         discount: int = 0, items: list | None = None, invoice: bool = False) -> bytes:
     pdfmetrics.registerFont(TTFont('SupportDocument', str(font_path)))
     buffer = BytesIO()
     page = Canvas(buffer, pagesize=A4)
-    page.setTitle('Черновик коммерческого предложения')
+    title = 'Черновик счёта' if invoice else 'Коммерческое предложение'
+    page.setTitle(title)
     page.setFont('SupportDocument', 18)
-    page.drawString(50, 775, 'Коммерческое предложение')
+    page.drawString(50, 775, title)
     page.setFont('SupportDocument', 11)
     price = offer['price_kopecks']
     head = ['ДЕМОНСТРАЦИОННОЕ КП. ПРЕДОПЛАТА ПО ОФЕРТЕ.' if approved else 'ЧЕРНОВИК ДЛЯ ПРОВЕРКИ МЕНЕДЖЕРОМ',
             'Поставщик: ПАО «Софтлайн»', f'Покупатель: {customer}']
+    if invoice:
+        head[0] = 'ДЕМОНСТРАЦИОННЫЙ РАСЧЁТ. ПОСТАВКУ УТОЧНИТ МЕНЕДЖЕР.'
     if items:  # несколько позиций одним КП
         body, total = [], 0
         for i, item in enumerate(items, 1):

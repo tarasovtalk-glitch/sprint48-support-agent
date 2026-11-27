@@ -25,6 +25,7 @@ EXPLICIT_HANDOFF = re.compile(r'позовите оператора|свяжит
 TENDER = re.compile(r'\b(?:44|223)\s*[-‐‑–—]?\s*фз\b|тендер|госзакупк|\bкотировк|проект\w*\s+(?:контракт|договор)')
 DEFERRED_PAYMENT = re.compile(r'оплат\w*.{0,40}через\s+\d+\s+(?:дн|месяц)|отсроч\w*\s+на\s+\d+\s+(?:дн|месяц)')
 SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежнему|вс[её]\s+ещ[её]|до\s+сих\s+пор|\bспам\w*.{0,25}проверен')
+INVOICE_REQUEST = re.compile(r'\b(?:выстав\w*|пришл\w*|сформируй\w*|нужен|хочу)\s+(?:\w+\s+){0,2}сч[её]т\b')
 KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
 ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
@@ -526,6 +527,10 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             return 'Спасибо, добавил к обращению. Менеджер увидит это сообщение и ответит здесь.', []
         reason = state.get('post_purchase_reason', 'order_question')
         return 'Менеджер проверит ваш заказ. ' + enter_queue(db, row, state, reason), []
+    if action == 'invoice' or INVOICE_REQUEST.search(query):
+        state['requested_invoice'] = True
+        if state.get('offer_id') and state.get('quantity') and not QUOTE_REQUISITES.search(text):
+            return queue_quote(db, row, state, catalog)
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER

@@ -283,11 +283,25 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                 reply, choices = run_turn(db, get_case(db, case_id), state, catalog_path,
                                           text=payload.text or '', action=payload.action, value=payload.value, intent_hint=hint,
                                           page_url=payload.page_url, tool=selected_tool)
+                case = get_case(db, case_id)
+                document_url = None
+                quote = state.get('quote_frozen', state.get('quote'))
+                if (case['state'] == 'pending' and state.get('queue_reason') == 'quote_review' and quote
+                        and state.get('requested_invoice') and state.get('invoice_draft_version') != case['version']):
+                    token = secrets.token_urlsafe(32)
+                    db.execute('INSERT INTO documents VALUES(?,?,?,?,?,?)', (
+                        token_hash(token), case_id, 'invoice', json.dumps({'catalog_quote': quote}),
+                        int(time.time()) + DOCUMENT_TTL, case['version'],
+                    ))
+                    document_url = f'{PREFIX}/documents/{token}'
+                    state['invoice_draft_version'] = case['version']
+                    reply += '\nЧерновик счёта приложен к сообщению.'
+                    append_event(db, case_id, 'document_prepared', 'invoice')
                 save_chat_state(db, case_id, state)
                 reply_buttons = buttons(choices)
-                agent_entry = save_chat_message(db, case_id, 'agent', reply, buttons=reply_buttons)
-                return {'reply': reply, 'intent': 'chat', 'document_url': None, 'buttons': reply_buttons,
-                        'case': case_view(get_case(db, case_id), use_fixture=False), 'messages': [client_entry, agent_entry]}
+                agent_entry = save_chat_message(db, case_id, 'agent', reply, document_url=document_url, buttons=reply_buttons)
+                return {'reply': reply, 'intent': 'chat', 'document_url': document_url, 'buttons': reply_buttons,
+                        'case': case_view(case, use_fixture=False), 'messages': [client_entry, agent_entry]}
         cues = intent_cues(payload.text) if payload.text else ''
         intent = payload.action or (classify(store, case_id, cues, api_key=model_key, model_uri=model_uri, daily=daily_limit, total=total_limit)
                                     if cues else 'unknown')
@@ -351,7 +365,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         if 'catalog_quote' in offer:
             quote = offer['catalog_quote']
             pdf = render_catalog_quote(quote['offer'], quote['customer'], quote['quantity'], quote['source_date'],
-                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''),
+                                       font_path, approved=row['kind'] == 'quote', invoice=row['kind'] == 'invoice',
+                                       inn=quote['inn'], kpp=quote.get('kpp', ''),
                                        discount=int(quote.get('discount_percent') or 0), items=quote.get('items'))
         else:
             pdf = render_pdf(row['kind'], offer, font_path)

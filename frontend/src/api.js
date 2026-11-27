@@ -63,7 +63,7 @@
   // реплика сервера {id, role, text, document_url, buttons, created} → сообщение экрана
   function toMessage(r, keepButtons) {
     var m = { seq: r.id, from: r.role, type: r.document_url ? 'file' : 'text', text: r.text || '', time: utc(r.created) };
-    if (r.document_url) m.file = { name: FILE_NAME, url: r.document_url };
+    if (r.document_url) m.file = { name: /черновик сч[её]та/i.test(r.text || '') ? 'Черновик счёта.pdf' : FILE_NAME, url: r.document_url };
     if (keepButtons && r.buttons && r.buttons.length) {
       m.buttons = r.buttons.filter(function (b) { return b && b.label && b.action; }).map(function (b, i) {
         var id = 'b' + (++pressSeq);
