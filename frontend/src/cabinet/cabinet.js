@@ -739,12 +739,14 @@
       '<button class="select" type="button" data-act="set-from" aria-haspopup="menu" aria-expanded="false" aria-label="С ' + esc(s.from) + '"' + dis + '>' + esc(s.from) + IC.chev + '</button><span class="muted" aria-hidden="true">–</span>' +
       '<button class="select" type="button" data-act="set-to" aria-haspopup="menu" aria-expanded="false" aria-label="До ' + esc(s.to) + '"' + dis + '>' + esc(s.to) + IC.chev + '</button></div></div></div>' +
       '<p>' + rich('Этот срок агент **называет клиенту**, когда передаёт вопрос менеджеру.\nВечером и в выходные обещает ответ **до ' + hmOf(mins(s.from) + 60) + ' рабочего дня**.') + '</p></section>';
-    var notify = '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2" id="notifyTitle">Уведомления менеджерам</h2><button class="switch" type="button" role="switch" aria-checked="' + !!s.notify + '" aria-labelledby="notifyTitle" data-act="notify"' + dis + '></button></div>' +
+    // уведомления менеджер меняет сам, даже когда лимит и часы задаются на сервере
+    var nro = jury || (ro && !s.notify_editable), ndis = nro ? ' disabled' : '';
+    var notify = '<section class="panel"><div class="panel__head panel__head--between"><h2 class="h2" id="notifyTitle">Уведомления менеджерам</h2><button class="switch" type="button" role="switch" aria-checked="' + !!s.notify + '" aria-labelledby="notifyTitle" data-act="notify"' + ndis + '></button></div>' +
       '<p class="muted" style="margin-top:-8px">' + t('Пишем менеджеру, когда агент передаёт ему разговор') + '</p>' +
       '<div class="options options--2' + (s.notify ? '' : ' is-off') + '" role="radiogroup" aria-label="Куда писать">' + (s.channels || []).map(function (ch) {
         if (ch.off) return '<div class="option option--off" aria-disabled="true"><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></div>';
         var on = s.channel === ch.id;
-        return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="channel" data-id="' + esc(ch.id) + '"' + (s.notify && !ro ? '' : ' disabled') + '><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></button>';
+        return '<button class="option' + (on ? ' is-selected' : '') + '" type="button" role="radio" aria-checked="' + on + '" data-act="channel" data-id="' + esc(ch.id) + '"' + (s.notify && !nro ? '' : ' disabled') + '><b>' + t(ch.name) + '</b><span>' + t(ch.note) + '</span></button>';
       }).join('') + '</div><p>' + rich(s.notify ? 'Уведомления **бесплатные** и лимит не тратят.' : 'Уведомления выключены: о новых разговорах менеджеры узнают **только в кабинете**.') + '</p></section>';
     var model = '<section class="panel"><h2 class="h2">Модель</h2><div class="options options--3" role="radiogroup" aria-label="Модель агента">' + (s.models || []).map(function (m) {
       var on = s.model === m.id;
@@ -754,7 +756,11 @@
   }
   function saveSettings(patch, done) {
     var s = store.settings;
-    return act('settings', 'PUT', '/agent/settings', patch, function (res) { Object.assign(s, res && typeof res === 'object' && res.limit_rub != null ? res : patch); })
+    return act('settings', 'PUT', '/agent/settings', patch, function (res) {
+      // сервер уведомлений отвечает итогом: включены ли на деле и какой канал — показываем его, а не просьбу
+      var real = res && typeof res === 'object' && res.channels ? { notify: !!res.notify, channel: res.channel, channels: res.channels } : null;
+      Object.assign(s, res && typeof res === 'object' && res.limit_rub != null ? res : real || patch);
+    })
       .then(function () { if (done) toast(done); render(); }, function () { render(); });
   }
 

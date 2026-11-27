@@ -542,7 +542,9 @@
   }
 
   function agentSettings() {
-    return loadMetrics().then(function (m) {
+    var notes = manager('GET', '/manager/notifications').catch(function () { return null; });
+    return Promise.all([loadMetrics(), notes]).then(function (pair) {
+      var m = pair[0], n = pair[1];
       var limit = m.total_limit_rub != null ? Math.round(m.total_limit_rub) : 250;
       return {
         readonly: true,
@@ -552,11 +554,13 @@
         days: 'Пн–пт',
         from: '9:00',
         to: '18:00',
-        notify: false,
-        channel: 'telegram',
-        channels: [
-          { id: 'telegram', name: 'Telegram', note: 'бот магазина' },
-          { id: 'max', name: 'MAX', note: 'нужна проверка компании', off: true }
+        // уведомления менеджеру — с сервера: включены ли, какой канал, какие боты подключены
+        notify: n ? !!n.notify : false,
+        notify_editable: !!(n && n.editable),
+        channel: n ? n.channel : 'telegram',
+        channels: n ? n.channels : [
+          { id: 'telegram', name: 'Telegram', note: 'не подключён', off: true },
+          { id: 'max', name: 'MAX', note: 'не подключён', off: true }
         ],
         model: 'active',
         models: [
@@ -583,6 +587,9 @@
     if (method === 'GET' && path === '/agent/metrics') return loadMetrics();
     if (method === 'GET' && path === '/agent/stats') return agentStats();
     if (method === 'GET' && path === '/agent/settings') return agentSettings();
+    if (method === 'PUT' && path === '/agent/settings' && body && Object.keys(body).every(function (k) { return k === 'notify' || k === 'channel'; })) {
+      return manager('POST', '/manager/notifications', body);
+    }
     if (method === 'GET' && path === '/cases') return casesList();
     if ((m = /^\/cases\/([^/]+)\/decision$/.exec(path))) return decide(decodeURIComponent(m[1]), body || {});
     if ((m = /^\/cases\/([^/]+)\/events$/.exec(path))) return events(decodeURIComponent(m[1]));

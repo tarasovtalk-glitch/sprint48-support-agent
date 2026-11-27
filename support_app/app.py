@@ -27,7 +27,7 @@ from .chat import buttons, customer_text, enter_queue, intent_cues, lookup, obse
 from .summary import cases_csv, handoff_facts, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
-from .notify import Telegram, in_background
+from .notify import Max, Notifier, Telegram, in_background
 from .proof import load_run, render as render_proof
 from .webim import WebimClient, button_id, parse_event
 from .model import OBSERVING_TOOLS, QWEN_MODEL, classify, run_agent
@@ -89,6 +89,11 @@ class JuryQuestion(BaseModel):
 
 class AgentPause(BaseModel):
     paused: StrictBool
+
+
+class NotifySettings(BaseModel):
+    notify: StrictBool | None = None
+    channel: Literal['telegram', 'max'] | None = None
 
 
 def require_key(expected: str, supplied: str):
@@ -174,8 +179,9 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
     webim_secret = os.environ.get('WEBIM_WEBHOOK_SECRET', '')
     webim_department = os.environ.get('WEBIM_DEP_KEY', '')
     public_url = os.environ.get('SUPPORT_PUBLIC_URL', '').rstrip('/')
-    telegram = Telegram(os.environ.get('TELEGRAM_BOT_TOKEN', ''), os.environ.get('TELEGRAM_CHAT_ID', ''),
-                        os.environ.get('SUPPORT_CABINET_URL', ''))
+    cabinet_url = os.environ.get('SUPPORT_CABINET_URL', '')
+    notifier = Notifier(Telegram(os.environ.get('TELEGRAM_BOT_TOKEN', ''), os.environ.get('TELEGRAM_CHAT_ID', ''), cabinet_url),
+                        Max(os.environ.get('MAX_BOT_TOKEN', ''), os.environ.get('MAX_CHAT_ID', ''), cabinet_url))
     app.include_router(catalog_router(catalog_path, demo_key, font_path, require_key), prefix=PREFIX)
 
     def cabinet_role(x_manager_key: str = Header(default='')) -> str:
@@ -315,7 +321,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                                           page_url=payload.page_url, tool=selected_tool)
                 case = get_case(db, case_id)
                 if before['state'] != 'pending' and case['state'] == 'pending':
-                    telegram.case_queued(case_id, state.get('queue_reason', ''), state.get('quote_frozen', state.get('quote')))
+                    notifier.case_queued(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None), case_id,
+                                         state.get('queue_reason', ''), state.get('quote_frozen', state.get('quote')))
                 document_url = None
                 quote = state.get('quote_frozen', state.get('quote'))
                 if (case['state'] == 'pending' and state.get('queue_reason') == 'quote_review' and quote
@@ -484,6 +491,26 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             set_setting(db, 'agent_paused', '1' if payload.paused else '0')
             set_setting(db, 'paused_since', since)
         return {'state': 'paused' if payload.paused else 'on', 'since': since}
+
+    @app.get(PREFIX + '/manager/notifications')
+    def notifications(reader: Store = Depends(cabinet_reader), role: str = Depends(cabinet_role)):
+        with store.connect() as db:
+            view = notifier.view(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None))
+        return {**view, 'editable': role in ('manager', 'admin')}
+
+    @app.post(PREFIX + '/manager/notifications', dependencies=[Depends(manager)])
+    def set_notifications(payload: NotifySettings):
+        if payload.channel is not None and not notifier.channels.get(payload.channel, None):
+            raise HTTPException(422, 'Unknown channel.')
+        if payload.channel is not None and not notifier.channels[payload.channel].enabled:
+            raise HTTPException(409, 'Channel is not connected.')
+        with store.connect(write=True) as db:
+            if payload.notify is not None:
+                set_setting(db, 'notify_on', '1' if payload.notify else '0')
+            if payload.channel is not None:
+                set_setting(db, 'notify_channel', payload.channel)
+            view = notifier.view(get_setting(db, 'notify_on', None), get_setting(db, 'notify_channel', None))
+        return {**view, 'editable': True}
 
     @app.get(PREFIX + '/manager/metrics')
     def manager_metrics(reader: Store = Depends(cabinet_reader)):
