@@ -695,7 +695,7 @@
 
   root.addEventListener('click', function (e) {
     var b = e.target.closest('[data-act], .slc-launcher'); if (!b) return;
-    if (b.classList.contains('slc-launcher')) { root.classList.add('is-open'); start(); setTimeout(function () { input.focus(); }, 200); return; }
+    if (b.classList.contains('slc-launcher')) { root.classList.add('is-open'); start(); setTimeout(function () { input.focus({ preventScroll: true }); }, 200); return; }
     var act = b.getAttribute('data-act');
     var menu = root.querySelector('.slc-menu');
     if (act === 'close') { hidePanel(); menu.classList.remove('is-open'); }

@@ -1,0 +1,88 @@
+:root {
+  color-scheme: light;
+  --ink: #202432;
+  --muted: #596377;
+  --brand: #a6093b;
+  --line: #e3e6ee;
+  --paper: #fff;
+  --frame: 1240px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #f6f7fb; color: var(--ink); font: 15px/1.5 "SLChatInter", system-ui, sans-serif; }
+a { color: inherit; text-underline-offset: 3px; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.wrap { max-width: var(--frame); margin-inline: auto; padding-inline: clamp(16px, 4vw, 44px); }
+.demo-label { position: sticky; top: 0; z-index: 1; margin: 0; padding: 8px 16px; background: #24283a; color: #fff; text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .035em; }
+.store-header { background: var(--paper); border-bottom: 1px solid var(--line); }
+.header-main { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 16px; min-height: 78px; }
+.brand { color: var(--brand); text-decoration: none; font-size: clamp(20px, 2.4vw, 28px); font-weight: 750; letter-spacing: -.05em; white-space: nowrap; }
+.brand span { color: #303645; }
+.catalog-link, .primary, .service-action { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 8px 15px; border: 0; border-radius: 8px; font-weight: 700; }
+.catalog-link, .primary { color: white; background: var(--brand); text-decoration: none; }
+.catalog-link:hover, .primary:hover { background: #85062e; }
+.product-search { display: flex; min-width: 0; border: 1px solid #cfd5e3; border-radius: 8px; background: #f8f9fd; }
+.product-search input { min-width: 0; flex: 1; padding: 10px 12px; border: 0; border-radius: 8px 0 0 8px; background: transparent; }
+.product-search button { margin: 3px; padding: 6px 12px; border: 0; border-radius: 5px; background: #e8eaf2; color: var(--ink); font-weight: 650; }
+.product-search button:hover { background: #dce0ed; }
+.help-link { padding: 9px 0; color: var(--brand); background: transparent; border: 0; font-weight: 700; }
+.categories { display: flex; align-items: center; gap: 8px 24px; flex-wrap: wrap; padding-block: 6px 14px; font-size: 13px; }
+.categories a { text-decoration: none; }
+.categories a:hover, .help-link:hover { text-decoration: underline; }
+.official { margin-left: auto; color: var(--muted); }
+.store-main { padding-block: 24px 52px; }
+.featured { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr); gap: 16px; }
+.hero, .service { border-radius: 14px; padding: clamp(18px, 3vw, 30px); }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) clamp(100px, 18vw, 174px); gap: clamp(8px, 2vw, 24px); align-items: center; background: #e8effb; }
+.hero-category, .service > p:first-child { margin: 0 0 6px; font-size: 13px; font-weight: 700; }
+.hero-category { color: #3a4c75; }
+.hero h1, .service h2, .catalog h2 { margin: 0; letter-spacing: -.035em; line-height: 1.12; }
+.hero h1 { font-size: clamp(27px, 3.4vw, 43px); }
+.hero-description { max-width: 380px; margin: 9px 0 15px; color: #3d4e6c; }
+.hero-image { width: 100%; height: auto; background: #fff; border-radius: 12px; }
+.service { background: #3a2947; color: #fff; }
+.service > p:first-child { color: #f8cadc; }
+.service h2 { font-size: clamp(23px, 2.6vw, 34px); }
+.service p { margin: 9px 0 14px; }
+.service-action { background: #fff; color: #482c54; }
+.service-action:hover { background: #faecf5; }
+.catalog { margin-top: 26px; }
+.catalog-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.catalog h2 { font-size: clamp(23px, 3vw, 32px); }
+.catalog-heading a { font-size: 13px; color: var(--brand); white-space: nowrap; }
+.product-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0; margin: 0; list-style: none; }
+.product { display: flex; flex-direction: column; align-items: start; min-width: 0; padding: 12px 15px 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); scroll-margin-top: 16px; }
+.product:target { border-color: var(--brand); }
+.product-image { display: grid; place-items: center; align-self: stretch; height: clamp(95px, 11vw, 120px); margin-bottom: 8px; }
+.product-image img { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.product-type, .product-details, .catalog-note { color: var(--muted); font-size: 12px; }
+.product-type { margin: 0 0 4px; }
+.product h3 { margin: 0; font-size: 15px; line-height: 1.3; }
+.product h3 a { text-decoration: none; }
+.product h3 a:hover { text-decoration: underline; }
+.product-details { margin: 6px 0 12px; }
+.price { margin-top: auto; font-size: 20px; font-weight: 750; }
+.product-action { min-height: 36px; margin-top: 6px; padding: 5px 10px; border: 1px solid #d9dceb; border-radius: 7px; background: #fff; color: var(--brand); font-size: 13px; font-weight: 700; }
+.product-action:hover { background: #fff3f7; border-color: var(--brand); }
+.catalog-note { margin: 10px 0 0; }
+#sl-chat .slc-feedback { display: none; }
+#sl-chat .slc-panel { width: min(390px, calc(100vw - 32px)); height: min(560px, calc(100dvh - 32px)); right: 16px; bottom: 16px; }
+#sl-chat .slc-head { cursor: grab; touch-action: none; user-select: none; }
+#sl-chat .slc-head button { cursor: pointer; }
+#sl-chat .slc-head button[data-move-chat] { cursor: grab; flex: 0 0 24px; min-height: 38px; color: white; font-size: 20px; border-radius: 7px; }
+#sl-chat .slc-head button[data-move-chat]:focus-visible { outline-color: white; }
+#sl-chat .slc-panel.is-moving .slc-head, #sl-chat .slc-panel.is-moving button[data-move-chat] { cursor: grabbing; }
+@media (max-width: 800px) {
+  .header-main { grid-template-columns: auto auto 1fr; gap: 8px 12px; padding-block: 10px; }
+  .product-search { grid-column: 1 / -1; grid-row: 2; }
+  .help-link { justify-self: end; }
+  .product-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .categories { gap: 6px 16px; }
+  .official { margin-left: 0; }
+}
+@media (max-width: 540px) {
+  .featured { grid-template-columns: minmax(0, 1fr); }
+  #sl-chat .slc-panel { right: 12px; bottom: 12px; width: min(380px, calc(100vw - 24px)); height: min(680px, 78dvh); }
+  #sl-chat .slc-head { gap: 6px; padding-left: 10px; }
+}
