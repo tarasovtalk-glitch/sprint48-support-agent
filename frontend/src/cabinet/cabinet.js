@@ -110,6 +110,7 @@
     tab: 'today', sub: 'work', sel: null, lastTab: null, lastSel: null,
     kpClosed: {}, kpEdit: {}, discount: {}, talkAll: {}, drafts: {}, help: {}, typing: {}, busy: {},
     jDay: midnight(new Date()), jFilter: null, jQuery: '', jOpen: {}, jSel: null,
+    qQuery: '', qOpen: {},
     kQuery: '', kOpen: {}, kAll: false, benefit: null
   };
 
@@ -205,9 +206,9 @@
     }
     var c = findCase(ui.sel), swap = ui.lastSel !== ui.sel; ui.lastSel = ui.sel;
     var st = status();
-    var head = '<section class="panel" aria-label="Ждут решения"><div class="panel__head"><h2 class="h2">Ждут решения</h2>' + counter(list.length) + '</div>' +
+    var head = '<section class="panel' + (list.length > QUEUE_GROUPS_FROM ? ' panel--fit' : '') + '" aria-label="Ждут решения"><div class="panel__head"><h2 class="h2">Ждут решения</h2>' + counter(list.length) + '</div>' +
       (st.state === 'limit' || st.state === 'paused' ? '<p class="panel__note">' + t((st.since ? 'С ' + st.since + ' ' : 'Сейчас ') + 'агент молчит: новые чаты приходят сюда без его сводки.') + '</p>' : '') +
-      '<div class="queue">' + list.map(queueRow).join('') + '</div></section>';
+      (list.length > QUEUE_GROUPS_FROM ? queueGroups(list) : '<div class="queue">' + list.map(function (x) { return queueRow(x); }).join('') + '</div>') + '</section>';
     return '<div class="today">' + head + '<div class="' + (swap ? 'swap-in' : '') + '" style="min-width:0">' + caseCard(c, 'today') + '</div><div class="side' + (swap ? ' swap-in' : '') + '">' + talkPanel(c, true) + '</div></div>';
   }
   function avatar(c, size) {
@@ -215,10 +216,32 @@
     if (!c.owner) return a;
     return '<span class="avatar-wrap" aria-hidden="true">' + a + '<span class="avatar avatar--mini">' + esc(c.owner.initials) + '</span></span>';
   }
-  function queueRow(c) {
+  /* Длинная очередь (больше восьми) как журнал: поиск и группы по тому, что решить, с числом и закреплённым заголовком.
+     Группы идут по самому срочному обращению в них, открыта первая и та, где выбранное. В группе карточка
+     названа первыми словами клиента, иначе десять карточек подряд звучали бы одинаково, как заголовок группы. */
+  var QUEUE_GROUPS_FROM = 8, IN_CHAT = 'Вы в чате с клиентом';
+  function queueGroups(list) {
+    var q = ui.qQuery.trim().toLowerCase(), by = {}, groups = [];
+    list.filter(function (c) {
+      return !q || [c.queue_title, c.title, c.client, c.first, c.kp && c.kp.buyer].join(' ').toLowerCase().indexOf(q) >= 0;
+    }).forEach(function (c) {
+      var name = c.status === 'in-chat' ? IN_CHAT : c.group || (c.kind === 'quote' ? 'КП на отправку' : 'Другие запросы');
+      if (!by[name]) groups.push(by[name] = { label: name, items: [] });
+      by[name].items.push(c);
+    });
+    groups.sort(function (a, b) { return (b.label === IN_CHAT) - (a.label === IN_CHAT); });
+    return '<label class="search">' + IC.search + '<input class="field" type="search" data-act="qsearch" placeholder="Клиент, ИНН или слова из чата" aria-label="Поиск по обращениям" value="' + esc(ui.qQuery) + '"></label>' +
+      '<div class="groups">' + (groups.length ? groups.map(function (g, i) {
+        var key = g.label, isOpen = !!q || (ui.qOpen[key] != null ? ui.qOpen[key] : i === 0 || g.items.some(function (c) { return c.id === ui.sel; }));
+        return '<div class="group"><button class="ghead" type="button" data-act="qgroup" data-key="' + esc(key) + '" data-open="' + isOpen + '" aria-expanded="' + isOpen + '"><span>' + t(g.label) + '</span>' + counter(g.items.length, true) + IC.chev + '</button>' +
+          (isOpen ? '<div class="glist queue">' + g.items.map(function (c) { return queueRow(c, true); }).join('') + '</div>' : '') + '</div>';
+      }).join('') : '<p class="nothing">' + t('Ничего не нашлось. Попробуйте название компании или ИНН') + '</p>') + '</div>';
+  }
+  function queueRow(c, grouped) {
     var f = (c.facts || [['Клиент', c.client]]);
+    var title = grouped && c.kind !== 'quote' && c.first ? '«' + c.first + '»' : c.queue_title || c.title;
     return '<button class="qrow' + (c.id === ui.sel ? ' is-selected' : '') + '" type="button" data-act="pick" data-id="' + esc(c.id) + '" aria-pressed="' + (c.id === ui.sel) + '">' +
-      '<span class="qrow__top"><span class="qrow__title">' + t(c.queue_title || c.title) + '</span>' + avatar(c) + '</span>' + caseBadge(c) +
+      '<span class="qrow__top"><span class="qrow__title" title="' + esc(title) + '">' + t(title) + '</span>' + avatar(c) + '</span>' + caseBadge(c) +
       '<span class="facts">' + f.map(function (x) { return fact(x[0], x[1]); }).join('').replace(/<div/g, '<span').replace(/<\/div>/g, '</span>') + '</span></button>';
   }
   function viewEmpty() {
@@ -422,7 +445,7 @@
       ui.jSel = shown.some(function (i) { return i.id === pref; }) && sameDay(day, new Date()) ? pref : shown.length ? shown[0].id : null;
     }
     var groups = jGroups(shown, day), dk = day.toDateString(), filtered = !!(q || ui.jFilter);
-    var left = '<section class="panel" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
+    var left = '<section class="panel panel--fit" aria-label="Разговоры"><div class="panel__head panel__head--between"><h2 class="h2">Разговоры</h2>' +
       '<button class="select" type="button" data-act="jday" aria-haspopup="menu" aria-expanded="false">' + esc(dayLabel(day)) + IC.chev + '</button></div>' +
       '<div class="chips"><button class="chip' + (ui.jFilter === 'open' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="open" aria-pressed="' + (ui.jFilter === 'open') + '">Не закрыты' + counter(open, true) + '</button>' +
       '<button class="chip' + (ui.jFilter === 'review' ? ' is-active' : '') + '" type="button" data-act="jfilter" data-key="review" aria-pressed="' + (ui.jFilter === 'review') + '">Проверить' + counter(review, !review) + '</button></div>' +
@@ -743,6 +766,7 @@
     }
     var a = f.getAttribute && f.getAttribute('data-act');
     if (a === 'jsearch') { ui.jQuery = f.value; rerenderKeep(f); }
+    if (a === 'qsearch') { ui.qQuery = f.value; rerenderKeep(f); }
     if (a === 'ksearch') { ui.kQuery = f.value; rerenderKeep(f); }
     if (a === 'discount') {
       var c = findCase(f.getAttribute('data-id')), v = num(f.value), bad = !(v >= 0 && v < 100) && f.value.trim() !== '';
@@ -868,6 +892,7 @@
       case 'cal-day': ui.jDay = new Date(+val); ui.jSel = null; closePop(false, true); render(); return;
       case 'jfilter': var key = b.getAttribute('data-key'); ui.jFilter = ui.jFilter === key ? null : key; ui.jSel = null; render(); return;
       case 'jgroup': ui.jOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
+      case 'qgroup': ui.qOpen[b.getAttribute('data-key')] = b.getAttribute('data-open') !== 'true'; render(); return;
       case 'jpick': ui.jSel = id; render(); return;
       case 'jfix': case 'jok': return review(a, id);
 
