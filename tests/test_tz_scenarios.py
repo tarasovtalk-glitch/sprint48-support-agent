@@ -27,6 +27,22 @@ def test_invoice_request_provides_one_draft_before_manager_review(chat, client):
     assert not again.get('document_url')
 
 
+def test_cryptopro_explicit_total_and_download_keep_quote_context(chat):
+    chat.say('Сколько стоит бессрочная лицензия КриптоПро?')
+    chat.say('На один компьютер, Windows')
+    recalc = chat.say('А если ещё два компьютера добавить, всего 3?')
+    assert '11 100 ₽' in recalc['reply']
+    download = chat.say('А дистрибутив где скачать?')
+    assert 'https://cryptopro.ru/products/csp' in download['reply'] and 'ИНН' not in download['reply']
+    assert chat.say(REQ)['case']['state'] == 'pending'
+
+
+def test_found_in_email_closes_support_exchange(chat):
+    chat.say('Счёт не пришёл на почту')
+    reply = chat.say('Нашёл в почте, спасибо')['reply']
+    assert '?' not in reply and '₽' not in reply and 'напишите' in reply
+
+
 def test_cryptopro_text_computer_and_44fz_tender(client):
     from eval.local import Chat
     c1 = Chat(client)

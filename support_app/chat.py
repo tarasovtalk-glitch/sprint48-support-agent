@@ -28,6 +28,7 @@ SUPPORT_TRIED = re.compile(r'не\s+(?:помог|получ)|по.?прежне
 INVOICE_REQUEST = re.compile(r'\b(?:выстав\w*|пришл\w*|сформируй\w*|нужен|хочу)\s+(?:\w+\s+){0,2}сч[её]т\b')
 KASPERSKY_CENTER = re.compile(r'kaspersky\s+security\s+cent(?:er|re)|\bksc\b|(?:центр|консол\w*)\s+(?:администрирован|управлен)')
 ANYDESK_NAME = re.compile(r'\b(?:anydesk|анидеск|энидеск)\w*')
+TOTAL_QUANTITY = re.compile(r'\b(?:всего|итого|суммарно)\s*:?\s*([1-9]\d{0,3})(?=\s*(?:[?!.),]*$|шт|мест|компьютер|устройств))')
 MDAEMON_NAME = re.compile(r'mdaemon|м\s*деймон')
 MDAEMON_STANDARD = re.compile(r'\bstandard\b|\bстандарт\w*')
 SMOLENSK = re.compile(r'(?:linux|линукс).{0,35}смоленск|смоленск.{0,35}(?:linux|линукс)')
@@ -465,7 +466,8 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
                 else 'Хорошо. Если понадобится помощь по заказу, напишите.'), []
     count_query = digits(query)
     correction = CORRECTION.search(count_query)
-    count = correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
+    total_quantity = TOTAL_QUANTITY.search(count_query) if state.get('flow') == 'cryptopro' else None
+    count = total_quantity or correction or re.search(r'\b([1-9]\d{0,3})\s*(?:бессрочн\w*\s+)?(?:лицензи|сотрудник|пользовател|человек|рабочих\s+мест|раб\.?\s*мест|узл|ящик|мест|штук|шт\b)', count_query)
     previous_quantity = state.get('quantity')
     if count:
         state['quantity'] = int(count.group(1))
@@ -534,6 +536,9 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if (state.get('flow') == 'cryptopro' or CRYPTO_NAME.search(query)) and re.search(r'дистрибутив|(?:где|как)\s+скачат', query):
+        return ('Дистрибутив КриптоПро CSP 5.0 доступен у разработчика. Откройте раздел «Ссылки» на странице продукта, '
+                'выберите «Скачать КриптоПро CSP 5.0» и войдите в аккаунт: https://cryptopro.ru/products/csp'), JOIN_MANAGER
     if KASPERSKY_CENTER.search(query) and (state.get('kaspersky_center') or 'kaspersky' in query or 'касперск' in query or 'kes' in query):
         state['kaspersky_center'] = True
         return ('Базовая консоль Kaspersky Security Center доступна для управления защитой организации. '
