@@ -152,7 +152,9 @@ def _conditions(st: dict, lines: list) -> Table:
 
 def _build(title: str, story: list, regular: str) -> bytes:
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=15 * mm,
+    # Offset the frame padding so the tables align with the 18 mm page margins.
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm - 6, rightMargin=18 * mm - 6,
+                            topMargin=15 * mm,
                             bottomMargin=22 * mm, title=title, author='Softline Store', subject=title)
     footer = _footer(regular, title)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
@@ -177,6 +179,12 @@ def render_pdf(kind: str, offer: dict, font_path: Path) -> bytes:
         terms.append('Условия отсрочки требуют решения менеджера.')
     story.append(KeepTogether(_conditions(st, terms)))
     return _build(title, story, regular)
+
+
+def _ru_date(value: str) -> str:
+    """2026-11-27 → 27.11.2026; иное — как есть."""
+    text = str(value or '')
+    return '.'.join(reversed(text[:10].split('-'))) if len(text) >= 10 and text[4] == '-' and text[7] == '-' else text
 
 
 def render_catalog_quote(offer: dict, customer: str, packages: int, source_date: str, font_path: Path, *, approved=False, inn='', kpp='',
@@ -207,6 +215,6 @@ def render_catalog_quote(offer: dict, customer: str, packages: int, source_date:
               KeepTogether(_conditions(st, [
                   'В т.ч. НДС: уточняется менеджером.',
                   'Срок поставки и срок действия: уточняются менеджером.',
-                  f'Источник цены: каталог Softline {source_date}.',
+                  f'Источник цены: каталог Softline {_ru_date(source_date)}.',
               ]))]
     return _build(title, story, regular)
