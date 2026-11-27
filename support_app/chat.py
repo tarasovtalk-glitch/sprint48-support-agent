@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 from contextlib import closing
@@ -5,8 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .dialog import CORRECTION, catalog_turn, digits, quantity, units_for
-from .catalog import find_matches, normalize, purchasable_units, read_only, view
+from .dialog import CORRECTION, catalog_turn, digits, multi_quote, quantity, support_topic, units_for
+from .catalog import discounted, find_matches, normalize, purchasable_units, read_only, view
 from .documents import rubles
 from .selection import Selection, selection_result
 from .knowledge import find_answer
@@ -190,6 +191,8 @@ def enter_queue(db, row, state, reason: str) -> str:
     if row['state'] == 'pending':
         return 'Запрос уже у менеджера. Его ответ появится здесь.'
     state['queue_reason'] = reason
+    if reason == 'quote_review':   # менеджер одобряет ровно то, что ушло ему; правки клиента после этого его не подменяют
+        state['quote_frozen'] = json.loads(json.dumps(state.get('quote')))
     db.execute("UPDATE cases SET state='pending',version=version+1,payment_due=NULL WHERE id=?", (row['id'],))
     append_event(db, row['id'], 'sent_to_manager', reason)
     return 'Передал запрос менеджеру. Его ответ появится в этом чате.'
@@ -219,6 +222,11 @@ def accept_inn(state, value: str):
         state['inn_rejected'] = value
 
 
+ORDER_DETAILS = re.compile(r'\d{4,}|заказ|ошибк|0x[0-9a-f]+|скрин|снимок')
+EXTRA_PURCHASE = re.compile(r'(?:ещё|еще|также|плюс|кроме\s+того)\s+(?:\w+\s+)?(?:нуж[еа]?н|надо|хочу|купить|возьм|беру)|\bи\s+(?:ещё\s+|еще\s+)?(?:нуж[еа]?н|купить)\w*\s+\w+')
+ORG_FORM = re.compile(r'(?<![^\W_])(?:ООО|АО|ПАО|ЗАО|ОАО|ИП|ГБУ|МБУ|ФГБУ|ГКУ|МКУ|НКО|АНО)\s+(?:[«"][^»"]{1,60}[»"]|[^,.;\n]{2,60})')
+
+
 def remember_quote_customer(state, text: str):
     for field, value in QUOTE_REQUISITES.findall(text):
         if field.upper() == 'ИНН' and INN_FORMAT.fullmatch(value):
@@ -235,6 +243,9 @@ def remember_quote_customer(state, text: str):
             accept_inn(state, bare_inn[1])
             name = (name[:bare_inn.start()] + name[bare_inn.end():]).strip(' \t\r\n,:;.-')
     name = re.sub(r'^(?:название(?: организации)?|организация|компания)\s*:\s*', '', name, flags=re.I)
+    form = ORG_FORM.search(name)
+    if form:   # «Подготовьте КП. ООО «Вектор»» → в КП только «ООО «Вектор»», без просьбы вокруг
+        name = form.group(0).strip(' ,.;')
     if any(char.isalpha() for char in name) and not re.search(r'\b(?:инн|кпп)\b', name, re.I):
         state['customer'] = ' '.join(name.split())[:100]
     else:
@@ -245,6 +256,11 @@ def remember_quote_customer(state, text: str):
 
 
 def queue_quote(db, row, state, catalog: Path):
+    if row['state'] == 'pending':
+        return 'Запрос уже у менеджера. Его ответ появится здесь.', []
+    if state.get('g_items') and catalog.is_file():   # расчёт нескольких позиций → КП на все строки
+        with closing(read_only(catalog)) as cat:
+            return multi_quote(cat, state, lambda reason: enter_queue(db, row, state, reason))
     if not state.get('offer_id'):
         return 'Сначала выберите позицию каталога, для которой нужно КП.', []
     if not state.get('quantity'):
@@ -277,12 +293,26 @@ def queue_quote(db, row, state, catalog: Path):
         'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
         'source_date': product['source_date'],
     }
+    discount = coupon(state)
+    if discount:
+        state['quote']['discount_percent'] = discount
+        state['quote']['amount_after_discount_kopecks'] = discounted(state['quote']['amount_kopecks'], discount)
     state['awaiting_customer'] = False
     append_event(db, row['id'], 'quote_amount_calculated', str(state['quote']['amount_kopecks']))
     message = enter_queue(db, row, state, 'quote_review')
     units = f'{chat_price(product["price_kopecks"])} × {quantity} = ' if quantity > 1 else ''
-    return (f'Черновик КП готов: {product["name"]}, {units}{chat_price(state["quote"]["amount_kopecks"])} по каталогу. '
+    after = (f', со скидкой по купону {discount}% — {chat_price(state["quote"]["amount_after_discount_kopecks"])}' if discount else '')
+    return (f'Черновик КП готов: {product["name"]}, {units}{chat_price(state["quote"]["amount_kopecks"])} по каталогу{after}. '
             f'Сумма по каталогу проверена. {message}'), []
+
+
+def coupon(state) -> int:
+    """Купон, который бот уже предложил в этом диалоге (не больше 5 %): он же попадает в КП."""
+    try:
+        percent = int(float(str(state.get('coupon_percent') or 0).replace(',', '.')))
+    except ValueError:
+        return 0
+    return percent if 0 < percent <= 5 else 0
 
 
 def registry_selection(db, req):
@@ -315,6 +345,7 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
         return edition + 'На сколько пользователей нужна лицензия?', []
     if not state.get('term') and state.get('term_asked'):
         state['term'] = 12
+        state['term_assumed'] = True   # клиент срок не назвал — говорим об этом прямо в ответе с вариантами
     if not state.get('term'):
         state['term_asked'] = True
         return 'На какой срок нужна лицензия?', [('12 месяцев', 'term', '12'), ('24 месяца', 'term', '24')]
@@ -344,6 +375,8 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
     lines = ['Варианты по данным каталога:']
     if state['flow'] == 'mdaemon':
         lines.append('Точное название Standard в фиде не подтверждено. Ниже — MDaemon Messaging Server для проверки.')
+    if state.get('term_assumed'):
+        lines.append('Срок вы не назвали — показываю на 12 месяцев; нужен другой срок — напишите.')
     if registry:
         lines.append('Номера из реестра отечественного ПО. Источник указан рядом, если он известен.')
     for topic, offer in shown:
@@ -352,7 +385,11 @@ def collect_selection(state, catalog: Path, db, case_id: str, registry=False):
         units = purchasable_units(offer, state['quantity'])
         total = f' × {units} = {chat_price(offer["price_kopecks"] * units)}' if units and units > 1 and offer['price_kopecks'] else ''
         lines.append(f'{topic}: {offer["name"]} — {price}{total}{registry_text}. Карточка: {offer["url"] or ""}')
-    return '\n'.join(lines), [(f'Выбрать: {topic}', 'select_offer', offer['id']) for topic, offer in shown]
+    # на кнопке — название того, что выбирает клиент, а не тема запроса («MDaemon Standard» вёл к Messaging Server)
+    def label(topic, offer):
+        name = normalize(offer['name'])
+        return topic if all(w[:4] in name for w in normalize(topic).split()) else offer['name'][:45]
+    return '\n'.join(lines), [('Выбрать: ' + label(topic, offer), 'select_offer', offer['id']) for topic, offer in shown]
 
 
 # просьба позвать человека; «согласовать через менеджера» — это вопрос, а не просьба
@@ -416,6 +453,17 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if known:  # менеджер уже отвечал на такой вопрос и сохранил общий ответ в базу знаний
         return ('Менеджер уже отвечал на такой вопрос: ' + known['answer'].rstrip()
                 + '\nЕсли у вас другой случай, нажмите «Позвать оператора» — передам вопрос менеджеру.'), JOIN_MANAGER
+    if (row['state'] == 'pending' and text and state.get('queue_reason') in ('order_question', 'activation_problem')
+            and ORDER_DETAILS.search(query) and not EXTRA_PURCHASE.search(query)):
+        # бот сам попросил номер заказа и текст ошибки — принимаем их в обращение, а не ищем товар по цифрам
+        append_event(db, row['id'], 'customer_details', 'order')
+        return 'Спасибо, добавил к обращению. Менеджер увидит номер заказа и ответит здесь.', []
+    topic = support_topic(query) if text and not action and not state.get('awaiting_customer') else None
+    if topic:   # «купил КриптоПро, не активируется ключ» — вопрос по заказу, а не новая продажа
+        answer, reason = topic
+        if EXTRA_PURCHASE.search(query):   # «…и ещё нужен Office на 5 мест» — вторую часть не теряем
+            answer += 'Покупку из вашего сообщения посчитаю отдельно — напишите её следующим сообщением. '
+        return (answer + enter_queue(db, row, state, reason), []) if reason else (answer, JOIN_MANAGER)
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
@@ -444,16 +492,30 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if re.search(r'оператор|тендер|госзакупк', query):
         return enter_queue(db, row, state, 'customer_request'), []
     if re.search(r'закрывающ|\bупд\b', query):
-        hint = 'Закрывающие документы по заказу есть в личном кабинете Store: https://store.softline.ru/ — откройте заказ. '
+        hint = ('По заказам юрлиц документы (счёт, УПД или акт) высылают по почтовому адресу из заказа; через ЭДО — заявка менеджеру или на '
+                'edo@softline.com (https://store.softline.ru/delivery_info/#q7). ')
         if re.search(r'оплачен|переслать|переда|пришлите|отправьте|нужен|нужны', query):
             return hint + enter_queue(db, row, state, 'closing_documents'), []
-        return hint + 'Если документов там нет, могу позвать оператора. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
-    if re.search(r'статус\s+заказа|(?:где|получить|пришел|найти).{0,25}ключ\w*\s*(?:лицензи|заказа|$)', query):
-        return 'Статус и данные электронной доставки проверяются в вашем заказе в личном кабинете Store: https://store.softline.ru/. Справка: https://docs.softline.com/ru-ru', JOIN_MANAGER
-    match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*%', query)
+        return hint + 'Если документов нет, могу позвать оператора.', JOIN_MANAGER
+    if re.search(r'(?:где|получить|пришел|найти).{0,25}ключ\w*\s*(?:лицензи|заказа|$)', query) and not re.search(r'\bне\s+(?:приш|приход)', query):
+        return 'Ключ приходит письмом на почту из заказа; статус и данные доставки — в личном кабинете Softline по ссылке из письма о заказе (https://store.softline.ru/delivery_info/#q2).', JOIN_MANAGER
+    match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*(?:%|процент)', query)
     discount = Decimal(match.group(1).replace(',', '.')) if match else None
     if action == 'more_discount' or re.search(r'(?:больш|выше).{0,35}(?:скид|купон|%)|(?:скид|купон).{0,30}(?:больш|выше)', query) or (discount is not None and discount > 5):
         return enter_queue(db, row, state, 'discount_over_limit'), []
+    if action != 'deferral' and re.search(r'скидк|купон', query) and not re.search(r'отсроч|постоплат', query) and state.get('g_items'):
+        # скидка после расчёта нескольких позиций — к общему итогу, без нового поиска товара
+        percent = int(discount) if discount is not None else 5
+        state['coupon_percent'] = str(percent)
+        append_event(db, row['id'], 'demo_coupon_offered', str(percent))
+        with closing(read_only(catalog)) as cat:
+            total = 0
+            for item in state['g_items']:
+                found = cat.execute('SELECT price_kopecks FROM products WHERE id=?', (item['id'],)).fetchone()
+                total += (found['price_kopecks'] or 0) * (item.get('units') or item['quantity'] or 1) if found else 0
+        return (f'Итого по {len(state["g_items"])} позициям: {chat_price(total)}, со скидкой {percent}% — {chat_price(discounted(total, percent))}. '
+                'Скидку до 5% даю сам по купону, больше — только через менеджера. Для КП пришлите название организации, ИНН и КПП.'), [
+                    ('Подготовить КП', 'quote', ''), ('Запросить больше', 'more_discount', '')]
     if action != 'deferral' and re.search(r'скидк|купон', query) and not re.search(r'отсроч|постоплат', query):
         general = catalog_turn(catalog, state, text, queue=lambda reason: enter_queue(db, row, state, reason),
                                quote=lambda: queue_quote(db, row, state, catalog))
@@ -468,7 +530,7 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             head = (general[0] + '\n') if general and general[0] and 'Нашёл' in general[0] else ''
             if not head:  # называем позицию и карточку: клиент и проверка видят, от какой цены скидка
                 head = f'{product["name"]}' + (f' ({product["url"]})' if product.get('url') else '') + (f', {qty} шт.' if qty > 1 else '') + '.\n'
-            return (head + f'Со скидкой {percent}%: {chat_price(total * (100 - percent) // 100)} вместо {chat_price(total)}. '
+            return (head + f'Со скидкой {percent}%: {chat_price(discounted(total, percent))} вместо {chat_price(total)}. '
                     'Скидку до 5% даю сам по купону, больше — только через менеджера.'), [('Подготовить КП', 'quote', ''), ('Запросить больше', 'more_discount', '')]
         if general and state.get('g_family'):
             return general[0] + '\nСкидку до 5% даю сам по купону, больше — через менеджера.', general[1]
@@ -543,10 +605,12 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if state.get('flow') in ('needs', 'mdaemon'):
         if action == 'term' and value in {'12', '24'}:
             state['term'] = int(value)
+            state.pop('term_assumed', None)
         elif text:
             terms = [months for months, pattern in TEXT_TERMS if pattern.search(query)]
             if len(terms) == 1:
                 state['term'] = terms[0]
+                state.pop('term_assumed', None)
         if action == 'deployment' and value in {'local', 'cloud', 'flexible'}:
             state['deployment'] = value
         elif text:

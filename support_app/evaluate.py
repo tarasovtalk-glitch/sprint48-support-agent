@@ -40,7 +40,7 @@ def outcome(state, reply, buttons):
         return 'manager_queue'
     if state.get('coupon_percent'):
         return 'demo_coupon'
-    if 'docs.softline.com/' in reply:
+    if any(x in reply for x in ('docs.softline.com/', 'store.softline.ru/delivery_info', 'login.softline.ru')):
         return 'knowledge_link'
     if any(action == 'select_offer' for _, action, _ in buttons):
         return 'catalog_options'

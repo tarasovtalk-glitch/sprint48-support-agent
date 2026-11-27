@@ -20,7 +20,8 @@ from pydantic import AliasChoices, BaseModel, Field, StrictBool, model_validator
 
 from .catalog import purchasable_units
 from .knowledge import all_answers, question_for, save_answer
-from .chat import buttons, customer_text, intent_cues, run_turn, tool_request
+from .chat import buttons, customer_text, intent_cues, lookup, run_turn, tool_request
+from .summary import cases_csv, handoff_summary, reason_text
 from .documents import render_catalog_quote, render_pdf, rubles
 from .mail import run_mail_queue
 from .model import choose_tool, classify
@@ -316,7 +317,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
         if 'catalog_quote' in offer:
             quote = offer['catalog_quote']
             pdf = render_catalog_quote(quote['offer'], quote['customer'], quote['quantity'], quote['source_date'],
-                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''))
+                                       font_path, approved=True, inn=quote['inn'], kpp=quote.get('kpp', ''),
+                                       discount=int(quote.get('discount_percent') or 0), items=quote.get('items'))
         else:
             pdf = render_pdf(row['kind'], offer, font_path)
         return Response(pdf, media_type='application/pdf', headers={
@@ -351,18 +353,34 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
                     COALESCE((SELECT j.created FROM journal j WHERE j.case_id=c.id AND j.event='opened' ORDER BY j.id LIMIT 1),
                              (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id LIMIT 1)) AS created,
                     (SELECT m.created FROM chat_messages m WHERE m.case_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
-                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message
+                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id LIMIT 1) AS first_client_message,
+                    (SELECT m.text FROM chat_messages m WHERE m.case_id=c.id AND m.role='client' ORDER BY m.id DESC LIMIT 1) AS last_client_message
                 FROM cases c
                 WHERE (?='all' OR c.state='pending') ORDER BY c.rowid DESC LIMIT ? OFFSET ?
             ''', (state, limit, offset)).fetchall()
             cases = []
             for row in rows:
                 context = chat_state(db, row['id'])
+                offer = lookup(catalog_path, context['offer_id']) if context.get('offer_id') and not context.get('quote') else None
                 cases.append({**case_view(row, use_fixture=not chat_only), 'reason': context.get('queue_reason'),
-                              'quote': context.get('quote') if context.get('queue_reason') == 'quote_review' else None,
+                              'reason_text': reason_text(context.get('queue_reason')),
+                              'summary': handoff_summary(context, offer and offer['name'], row['last_client_message']),
+                              'quote': context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None,
                               'created': row['created'], 'updated': row['last_message'] or row['created'],
                               'first_client_message': row['first_client_message']})
             return {'cases': cases}
+
+    @app.get(PREFIX + '/manager/cases/export.csv')
+    def export_cases(reader: Store = Depends(cabinet_reader)):
+        """Выгрузка журнала обращений для разбора: причина, сводка, первая реплика. Открывается в Excel."""
+        rows = []
+        while len(rows) < 5000:   # постранично, не больше 5 000 обращений за выгрузку
+            page = queue(state='all', limit=100, offset=len(rows), reader=reader)['cases']
+            rows += page
+            if len(page) < 100:
+                break
+        return Response(cases_csv(rows), media_type='text/csv; charset=utf-8', headers={
+            'Content-Disposition': 'attachment; filename="cases.csv"', 'Cache-Control': 'no-store'})
 
     @app.get(PREFIX + '/manager/cases/{case_id}/messages')
     def manager_messages(case_id: str, after: int | None = Query(default=None, ge=0), reader: Store = Depends(cabinet_reader)):
@@ -387,8 +405,8 @@ def create_app(database: Path, scenario_path: Path = DEMO_SOURCE) -> FastAPI:
             offer = json.loads(row['offer'])
             approved = decision.choice == 'approve'
             context = chat_state(db, case_id) if chat_only else {}
-            quote = context.get('quote') if context.get('queue_reason') == 'quote_review' else None
-            if approved and quote and 'requested_users' not in quote:
+            quote = context.get('quote_frozen', context.get('quote')) if context.get('queue_reason') == 'quote_review' else None
+            if approved and quote and 'requested_users' not in quote and 'items' not in quote:
                 if purchasable_units(quote['offer'], quote['quantity']) != quote['quantity']:
                     raise HTTPException(409, 'The draft quantity needs review. Reject this draft and start a new quote.')
             state = 'approved' if approved else 'rejected'

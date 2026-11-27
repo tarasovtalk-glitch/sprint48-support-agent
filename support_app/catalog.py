@@ -45,6 +45,11 @@ KASPERSKY_TIERS = (
 )
 
 
+def discounted(total_kopecks: int, percent: int) -> int:
+    """Сумма со скидкой: одно правило округления для чата, черновика и PDF (скидка округляется до копейки, половина — вверх)."""
+    return int(total_kopecks) - (int(total_kopecks) * int(percent) + 50) // 100
+
+
 def normalize(value: str) -> str:
     return value.casefold().replace('ё', 'е')
 

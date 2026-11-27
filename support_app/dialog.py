@@ -11,7 +11,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from .catalog import normalize, read_only, view
+from .catalog import KASPERSKY_FAMILIES, discounted, normalize, read_only, tiered_annual_offer, view
 
 # ── слова, которые не называют товар ──────────────────────────────────────────
 STOP = set('''
@@ -504,14 +504,14 @@ def money(kopecks: int) -> str:
     return f'{text},{kop:02d} ₽' if kop else f'{text} ₽'
 
 
-def price_line(offer: dict, qty: int | None, discount: int = 0) -> str:
-    units = units_for(offer, qty) or 1
+def price_line(offer: dict, qty: int | None, discount: int = 0, units: int | None = None) -> str:
+    units = units or units_for(offer, qty) or 1
     total = offer['price_kopecks'] * units
     line = f'{offer["name"]} — {money(offer["price_kopecks"])}'
     if units > 1:
         line += f' × {units} = {money(total)}'
     if discount:
-        line += f'; со скидкой {discount}% — {money(total * (100 - discount) / 100)}'
+        line += f'; со скидкой {discount}% — {money(discounted(total, discount))}'
     return line + (f'. Карточка: {offer["url"]}' if offer.get('url') else '')
 
 
@@ -520,12 +520,14 @@ FAQ = (
     (re.compile(r'\bндс\b'), 'Цены в каталоге Softline Store указаны с НДС, если в карточке не сказано иное. Счёт для юрлица выставляется с НДС; '
                               'точную ставку по позиции менеджер укажет в КП.'),
     (re.compile(r'эдо|бух\w*\s+документ|закрывающ|оригинал\w*|упд|акт\w*\s+(?:и|выполн)'),
-     'Закрывающие документы приходят через ЭДО; оригиналы почтой можно запросить у менеджера. По оплаченному заказу документы '
-     'также видны в личном кабинете Store: https://store.softline.ru/'),
+     'По заказам юрлиц бухгалтерские документы (счёт, УПД или акт) высылают по почтовому адресу из заказа; при электронной доставке — Почтой '
+     'России в течение 7 рабочих дней после отправки ключа. Через ЭДО — заявка менеджеру или на edo@softline.com с оператором и реквизитами '
+     '(https://store.softline.ru/delivery_info/#q7).'),
     (re.compile(r'как\s+получ\w*\s+(?:коммерческ|кп)'), 'Соберу черновик КП по каталогу: напишите продукт, количество и срок. Какой продукт нужен?'),
-    (re.compile(r'скача\w*|как\s+получ\w*\s+(?:ключ|лиценз|программ)|ключ\w*.{0,30}(?:приход|прид|получ)|после оплаты|доставк\w*'),
-     'Электронные лицензии приходят письмом на почту из заказа в любой регион: ключ и ссылка на скачивание, обычно в течение рабочего дня '
-     'после оплаты. Доставку коробок и оборудования в ваш город и её срок уточнит менеджер.'),
+    (re.compile(r'(?<!\w)(?!.*дистрибутив)(?:скача\w*)|как\s+получ\w*\s+(?:ключ|лиценз|программ)|ключ\w*.{0,30}(?:приход|прид|получ)|после оплаты|доставк\w*'),
+     'Электронные лицензии приходят письмом на почту из заказа в любой регион; срок указан в карточке товара — от 5 минут до 30 рабочих дней. '
+     'Коробки и оборудование: 2–3 рабочих дня по Москве и области, 2–7 рабочих дней по России после оплаты; стоимость доставки считается '
+     'при оформлении заказа (https://store.softline.ru/delivery_info/#q9).'),
     (re.compile(r'(?:физ\w*\s*лиц|физлиц|просто человек|частн\w+\s+лиц|не предприниматель)'),
      'Да, физическое лицо может купить на сайте store.softline.ru с оплатой картой; документы оформляются на покупателя. '
      'Для юрлица — по счёту с реквизитами.'),
@@ -544,12 +546,73 @@ FAQ = (
     (re.compile(r'дистрибутив'), 'Дистрибутив обычно скачивается бесплатно с сайта производителя; в цену лицензии входит право использования.'),
     (re.compile(r'навсегда|бессрочн\w*\s*\?|это\s+бессрочн'), None),
 )
+# ── после покупки и справка магазина: ответы по статьям store.softline.ru/delivery_info (прочитано 27.11) ──────────
+HELP = 'https://store.softline.ru/delivery_info/'
+SUPPORT_TOPICS = (
+    # (шаблон, ответ, причина передачи менеджеру или None)
+    (re.compile(r'не\s+(?:\w+\s+){0,2}активир\w*|ошибк\w*\s+(?:при\s+)?(?:активир|активац)|(?:помогите|как)\s+(?:\w+\s+)?активир'
+                r'|активаци\w*\s+(?:\w+\s+){0,3}(?:не\s|ошибк)|ключь?\w*\s+(?:\w+\s+){0,2}(?:не\s+(?:п[ао]дх|принима|работ|актив)|недейств|уже\s+(?:использ|активир))'
+                r'|(?:недействител|неверн)\w*\s+(?:ключ|лиценз|серийн)|лиценз\w*\s+недейств|0x[0-9a-f]{6,8}'),
+     'Проблему с активацией разберёт менеджер по вашему заказу: у меня нет доступа к заказам. Пришлите сюда номер заказа и текст ошибки '
+     '(можно снимок экрана) — так ответят быстрее. Базовая техподдержка Softline бесплатна 3 месяца после покупки: store.support@softline.com, '
+     f'+7 (495) 128-41-36, по рабочим дням с 9 до 18 МСК ({HELP}#q13). ', 'activation_problem'),
+    (re.compile(r'статус\w*\s+(?:\w+\s+){0,2}заказ|(?:где|когда)\s+(?:\w+\s+){0,2}(?:мой|наш)\s+заказ|состояни\w*\s+(?:\w+\s+)?заказ'),
+     f'Статус заказа виден в личном кабинете Softline — ссылка на него есть в письме о заказе ({HELP}#q2). У меня нет доступа к заказам, '
+     'поэтому передаю вопрос менеджеру; пришлите номер заказа. ', 'order_question'),
+    (re.compile(r'не\s+(?:приш|приход|получ|приезж)\w*\s+(?:\w+\s+)?(?:письм|ключ|лиценз|заказ)|(?:письм|ключ|лиценз|заказ)\w*\s+(?:\w+\s+){0,3}не\s+(?:приш|приход|получ|доставл)'
+                r'|оплатил\w*\s+(?:\w+\s+){0,4}(?:ключ|лиценз|письм)\w*\s+(?:так\s+и\s+)?(?:нет|не\s)|(?:ключ|лиценз)\w*\s+(?:до\s+сих\s+пор\s+|так\s+и\s+|всё\s+ещё\s+|все\s+еще\s+)?нет\b'),
+     'Электронные ключи отправляют по рабочим дням с 9 до 21 МСК, срок указан в карточке товара — от 5 минут до 30 рабочих дней '
+     f'({HELP}#q9). Проверьте папку «Спам». Чтобы проверить ваш заказ, передаю вопрос менеджеру; пришлите номер заказа. ', 'order_question'),
+    (re.compile(r'возврат\w*|верн(?:уть|ите|ете)\s+(?:\w+\s+)?(?:деньг|товар|лиценз|оплат)|деньг\w*\s+(?:\w+\s+)?верн|отказ\w*\s+от\s+(?:заказ|покупк|товар)'),
+     'По правилам магазина электронные лицензии возврату не подлежат: ключ генерируется под покупателя. Коробки и оборудование можно вернуть до '
+     f'получения или в течение 7 дней после, если не вскрыта упаковка ({HELP}#q15). Ваш случай оформит менеджер — передаю; пришлите номер заказа. ',
+     'order_question'),
+    (re.compile(r'(?:забыл|восстанов|сброс|смен|не\s+помн|поменя)\w*\s+(?:\w+\s+)?парол|парол\w*\s+(?:от|для|к)\s+(?:входа\s+(?:в|на)\s+)?(?:личн|кабинет|аккаунт|учетн|учётн|сайт|магазин)'
+                r'|не\s+(?:могу|получается|удается|удаётся)\s+(?:войти|зайти)\s+(?:в|на)\s+(?:личн|кабинет|аккаунт|сайт|магазин|softline|софтлайн|store)'
+                r'|не\s+(?:могу|получается|удается|удаётся)\s+(?:войти|зайти)\s*(?:[.?!]|$)|восстанов\w*\s+(?:доступ|аккаунт|учетн|учётн)'),
+     'Восстановить пароль: на странице входа https://login.softline.ru нажмите «Забыли пароль?» (https://login.softline.ru/password) '
+     'и укажите почту аккаунта. Письмо не пришло — проверьте «Спам»; если не помогло, нажмите «Позвать оператора».', None),
+    (re.compile(r'не\s+(?:могу|получается|удается|удаётся)\s+(?:войти|зайти|запустить|установить)\s+(?:в\s+)?\w+|не\s+(?:запуска|устанавлива)ет\w*'
+                r'|вылета\w*|после\s+обновлени\w*\s+(?:не\s|ошибк|слетел)|ошибк\w*\s+при\s+(?:установк|запуск|обновлени)'),
+     'С работой установленной программы помогает техподдержка: базовая поддержка Softline бесплатна 3 месяца после покупки — '
+     f'+7 (495) 128-41-36, store.support@softline.com, по рабочим дням с 9 до 18 МСК ({HELP}#q13). Если вопрос по заказу — нажмите «Позвать оператора».', None),
+    (re.compile(r'доверенност\w*|форм\w*\s+м-?2\b'),
+     'При получении товара юрлицу нужна доверенность на получение ТМЦ по форме М-2 и документ, удостоверяющий личность; ИП — печать или копия '
+     'свидетельства о регистрации и копия паспорта, доверенному лицу ИП — оригинал доверенности М-2. Физлицу — паспорт '
+     f'({HELP}#q11). Это для физической доставки товара.', None),
+    (re.compile(r'как\s+(?:можно\s+)?(?:оплат|заплат)\w*|способ\w*\s+оплат|чем\s+(?:можно\s+)?оплат|оплат\w*\s+(?:через\s+)?сбп|sberpay'
+                r'|(?:можно|можем|принимаете)\s+(?:ли\s+)?(?:\w+\s+)?оплат\w*\s+(?:\w+\s+)?(?:картой|карточкой|частями|наличн|по\s+сч[её]т)|оплат\w*\s+по\s+сч[её]ту?\s+для'),
+     'Способы оплаты: банковский платёж по счёту (юрлица и ИП), банковская карта, СБП и SberPay (физлица), подарочный сертификат; '
+     f'физлицам при получении коробок и оборудования — картой. Отсрочки нет, оплата заранее ({HELP}#q5).', None),
+    (re.compile(r'(?:есть|какая|куда|контакт\w*|телефон\w*|почт\w*|бесплатн\w*)\s+(?:\w+\s+)?(?:техподдерж|техническ\w*\s+поддерж)|(?:техподдерж|техническ\w*\s+поддерж)\w*\s+после\s+покупк'
+                r'|(?:обратиться|написать|позвонить|дозвониться)\s+(?:\w+\s+)?(?:в|к)\s+(?:тех)?поддержк|(?:тех)?поддержк\w*\s+(?:работа\w*|по\s+заказ|отвеча)'),
+     'Базовая техподдержка бесплатна 3 месяца после покупки лицензионного ПО в Softline: +7 (495) 128-41-36, store.support@softline.com, '
+     f'по рабочим дням с 9 до 18 МСК ({HELP}#q13).', None),
+)
+
+
+PURCHASED = re.compile(r'купил|приобрел|приобрёл|оплатил|заказал|(?:мой|наш|номер|по)\s+заказ|после\s+(?:покупк|оплат)|верн\w*\s+(?:\w+\s+)?деньг|деньг\w*\s+(?:\w+\s+)?верн|уже\s+(?:есть|получ)')
+RETURN_ANSWER_ONLY = ('По правилам магазина электронные лицензии возврату не подлежат: ключ генерируется под покупателя. Коробки и оборудование '
+                      f'можно вернуть до получения или в течение 7 дней после, если не вскрыта упаковка ({HELP}#q15). ')
+
+
+def support_topic(t: str):
+    """Вопрос после покупки или по справке магазина — раньше поиска товара: «купили Kaspersky, не активируется» не про покупку.
+    Вопрос о правилах возврата до покупки («хочу купить Astra, какие условия возврата?») — ответ без передачи, продажа продолжается."""
+    for pattern, answer, reason in SUPPORT_TOPICS:
+        if pattern.search(t):
+            if reason and 'возврат' in answer and not PURCHASED.search(t):
+                return RETURN_ANSWER_ONLY + 'Продолжим подбор — какой продукт и на сколько мест нужен?', None
+            return answer, reason
+    return None
+
+
 HANDOFF_FIRST = re.compile(r'ключ\w*\s+(?:найти|не\s+приш|потерял)|не\s+могу\s+найти|в\s+кабинете\s+не|сами.{0,20}посмотр|апгрейд|upgrade|'
                            r'история\s+заказ|в\s+\w+\s+20\d\d\s+(?:приобрет|покуп|купил)|возврат\w*|вернуть\s+деньги|'
                            r'письм\w*\s+с\s+ключ\w*\s+нет|не\s+приш\w*\s+(?:письм|ключ)|оплат\w*\s+прошл\w*.{0,60}(?:нет|не\s+приш)|'
                            r'то\s+же,?\s+что\s+(?:в|и)\s+прошл|прошл\w*\s+(?:покупк|заказ)')
 PRICE_OVERRIDE = re.compile(r'(?:постав|сдела|укаж|напиш|впиш)\w*\s+(?:\w+\s+){0,4}цен\w*\s+(?:\w+\s+){0,2}\d|цен\w*\s+(?:в\s+)?\d[\d\s]*\s*(?:руб|₽|р\b)')
-COMPLAINT = re.compile(r'толку\s+(?:от\s+\w+\s+(?:\w+\s+)?)?нет|(?:напишу|пишу|подам|подаю|оставлю|направлю)\s+(?:\w+\s+)?(?:жалоб|претензи)\w*|безобрази\w*|не\s+получил\w*\s+ответ|ответ\w*\s+(?:на\s+\w+\s+)?вопрос\w*\s+не\s+получ|лояльност\w*\s+(?:к\s+клиент\w*\s+)?нет')
+COMPLAINT = re.compile(r'(?:^|\s)(?:у\s+меня\s+)?жалоб\w*\b(?!\s+на\s+(?:цен|товар))|пожаловат\w*|нахамил\w*|хамств\w*|толку\s+(?:от\s+\w+\s+(?:\w+\s+)?)?нет|(?:напишу|пишу|подам|подаю|оставлю|направлю)\s+(?:\w+\s+)?(?:жалоб|претензи)\w*|безобрази\w*|не\s+получил\w*\s+ответ|ответ\w*\s+(?:на\s+\w+\s+)?вопрос\w*\s+не\s+получ|лояльност\w*\s+(?:к\s+клиент\w*\s+)?нет')
 REQUEST_STATUS = re.compile(r'(?:запрос|заявк|обращени)\w*\s+(?:на\s+кп\s+|кп\s+)?(?:№\s*)?(\d{4,})|направлял\w*\s+(?:запрос|заявк)|отправлял\w*\s+(?:запрос|заявк)|'
                             r'когда\s+(?:можно\s+)?(?:будет\s+)?(?:получить|ждать)\s+(?:ответ|кп|счет)')
 CARD_FOR_ORG = re.compile(r'(?:сво\w*|личн\w*)\s+(?:банковск\w*\s+)?карт\w*.{0,160}(?:организац|юр\w*\s*лиц|реквизит|библиотек|бухгалтер)|'
@@ -717,6 +780,10 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
         num = re.search(r'(?:запрос|заявк|обращени)\w*\s+(?:на\s+кп\s+|кп\s+)?(?:№\s*)?(\d{4,})|№\s*(\d{4,})', t)
         number = f' № {num.group(1) or num.group(2)}' if num else ''
         return f'Статус запроса{number} проверит менеджер: у меня нет доступа к истории обращений. ' + queue('request_status'), []
+    topic = support_topic(t)
+    if topic:
+        answer, reason = topic
+        return (answer + queue(reason), []) if reason else (answer, [('Позвать оператора', 'handoff', '')])
     if HANDOFF_FIRST.search(t):
         return 'По вашему заказу проверит менеджер: у меня нет доступа к истории покупок. ' + queue('order_question'), []
     if INSIST.search(t) and (state.get('g_family') or state.get('g_missing')):
@@ -727,9 +794,9 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
             current = _family(db, state['g_family'])
             if current:
                 return composition_reply(current, state.get('offer_id'), text), [('Позвать оператора', 'handoff', '')]
-        if state.get('g_items') and re.search(r'\bинн\b', t):
-            return multi_quote(db, state, queue)
-        several = None if state.get('g_family') or SKU.search(normalize(text)) else multi_item(db, state, text)
+        if state.get('g_items') and (re.search(r'\bинн\b', t) or state.get('awaiting_customer')):
+            return quote()   # общий путь КП: проверка «уже у менеджера», недостающие реквизиты, черновик
+        several = None if state.get('g_family') or SKU.search(normalize(text)) else multi_item(db, state, text, queue)
         if several:
             return several
         family, ratio, hit, unknown = find_family(db, tokens, text)
@@ -879,29 +946,63 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
 ITEM_SPLIT = re.compile(r'\s+(?:и|плюс|а\s+также|ещё|еще)\s+(?=(?:[1-9]\d{0,3})\s)|;|\n|\s\+\s(?=[1-9]\d{0,3}\s)')
 
 
-def multi_item(db, state: dict, text: str):
-    """Несколько товаров в одной реплике: по строке на позицию и общий итог. Суммы — только цена каталога × количество."""
-    parts = [p for p in ITEM_SPLIT.split(digits(text)) if p and p.strip()]
+COMMA_ITEM = re.compile(r',\s*')
+QTY_WORDS = re.compile(r'\b[1-9]\d{0,3}\s*(?:шт\w*|лиценз\w*|рабоч\w*\s+мест\w*|мест\w*|пользовател\w*|узл\w*|устройств\w*)\.?(?!\w)', re.I)
+LEADING_QTY = re.compile(r'^\s*(?:беру\s+|нуж\w*\s+|ещё\s+|еще\s+)?([1-9]\d{0,3})\s+(?!(?:год|года|лет|мес|месяц\w*)\b)(?=[^\d\s])', re.I)
+
+
+def item_quantity(part: str) -> int | None:
+    """«2 Office …» — число перед названием тоже количество (кроме «2 года», «12 месяцев»)."""
+    m = LEADING_QTY.match(part)
+    return int(m.group(1)) if m else quantity(part)
+
+
+def multi_item(db, state: dict, text: str, queue=None):
+    """Несколько товаров в одной реплике: по строке на позицию и общий итог. Суммы — только цена каталога × количество.
+    Позицию, которую не нашли, не теряем молча: называем её клиенту."""
+    plain = digits(text)
+    parts = [p for p in ITEM_SPLIT.split(plain) if p and p.strip()]
+    if len(parts) < 2:   # «Windows 11 Pro 1 шт, Office … 2 шт» — через запятую, только если у каждой части своё количество
+        commas = [p for p in COMMA_ITEM.split(plain) if p.strip()]
+        if len(commas) >= 2 and all(item_quantity(p) for p in commas):
+            parts = commas
     if len(parts) < 2:
         return None
-    items, seen = [], set()
+    items, seen, missed = [], set(), []
     for part in parts:
         fam, conf, _, _ = find_family(db, words(part), part)
+        lead = LEADING_QTY.match(part)
+        if (not fam or conf < 0.9) and (QTY_WORDS.search(part) or (lead and re.match(r'[a-z]', part[lead.end():], re.I))):
+            # «Kaspersky Password Manager 3 шт», «2 Office …»: количество мешает узнать товар — пробуем без него
+            name = QTY_WORDS.sub(' ', LEADING_QTY.sub(' ', part, count=1))
+            fam, conf, _, _ = find_family(db, words(name), name)
         if not fam or conf < 0.9 or fam[0]['family'] in seen:
+            if item_quantity(part) and (not fam or fam[0]['family'] not in seen):
+                missed.append(' '.join(part.split())[:60])
             continue
-        offers = choose(fam, {'g_term': term(part), 'quantity': quantity(part)}, part)
+        qty = item_quantity(part) or 1
+        offers = choose(fam, {'g_term': term(part), 'quantity': qty}, part)
         if not offers:
             return None  # одну из позиций не нашли с ценой — не считаем итог наполовину
         seen.add(fam[0]['family'])
-        qty = quantity(part) or 1
-        units = units_for(offers[0], qty) or 1
-        items.append((offers[0], qty, offers[0]['price_kopecks'] * units))
-    if len(items) < 2:
+        units = units_for(offers[0], qty)
+        family_sku = next((f for f in KASPERSKY_FAMILIES if (offers[0].get('sku') or '').upper().startswith(f)), None)
+        if family_sku:   # у Касперского цена зависит от диапазона узлов: берём позицию своего диапазона или сверку у менеджера
+            tiered = tiered_annual_offer(db, family_sku, qty)
+            offers, units = ([tiered], qty) if tiered else (offers, None)
+        if units is None:  # позиция не рассчитана на такое количество — итог не считаем, сверит менеджер
+            return (f'Для «{offers[0]["name"]}» на {qty} нужно подобрать другую позицию по количеству — сверит менеджер. '
+                    + queue('price_confirmation'), [])
+        items.append((offers[0], qty, units))
+    if len(items) < 2 and not (items and missed):
         return None
-    state['g_items'] = [{'id': o['id'], 'quantity': q} for o, q, _ in items]
+    state['g_items'] = [{'id': o['id'], 'quantity': q, 'units': u} for o, q, u in items]
     state['offered_ids'] = [o['id'] for o, _, _ in items]
-    lines = ['Посчитал по позициям:'] + [f'{i}. {price_line(o, q)}' for i, (o, q, _) in enumerate(items, 1)]
-    lines.append(f'Итого: {money(sum(t for _, _, t in items))}. Для КП пришлите название организации, ИНН и КПП.')
+    lines = ['Посчитал по позициям:'] + [f'{i}. {price_line(o, q, units=u)}' for i, (o, q, u) in enumerate(items, 1)]
+    lines.append(f'Итого: {money(sum(o["price_kopecks"] * u for o, _, u in items))}.')
+    if missed:
+        lines.append('Не смог точно определить: ' + '; '.join(f'«{m}»' for m in missed) + ' — напишите эту позицию отдельным сообщением, добавлю.')
+    lines.append('Для КП пришлите название организации, ИНН и КПП.')
     return '\n'.join(lines), [('Подготовить КП', 'quote', '')]
 
 
@@ -914,14 +1015,44 @@ def multi_quote(db, state: dict, queue):
     if not state.get('kpp') and len(state.get('inn') or '') != 12:
         need.append('КПП')
     if need:
+        state['awaiting_customer'] = True
         return f'Для КП укажите ещё {", ".join(need)}.', []
-    lines, total = [f'Черновик КП для {state["customer"]}:'], 0
+    lines, total, items = [f'Черновик КП для {state["customer"]}:'], 0, []
+    meta = db.execute("SELECT value FROM metadata WHERE name='source_date'").fetchone()
+    source_date = meta[0] if meta else ''
     for i, item in enumerate(state['g_items'], 1):
-        offer = view(db.execute('SELECT * FROM products WHERE id=?', (item['id'],)).fetchone())
-        units = units_for(offer, item['quantity']) or 1
+        found = db.execute('SELECT * FROM products WHERE id=?', (item['id'],)).fetchone()
+        offer = view(found) if found else None
+        units = (item.get('units') or units_for(offer, item['quantity'])) if offer and offer['available'] and offer['price_kopecks'] else None
+        if units is None:   # позиция пропала из каталога после обновления или не покрывает количество — не печатаем КП наполовину
+            state.pop('g_items', None)
+            state['awaiting_customer'] = False
+            name = f'«{offer["name"]}»' if offer else 'Одна из позиций'
+            return f'{name} нужно пересчитать: в каталоге изменились цена или наличие. ' + queue('price_confirmation'), []
         total += offer['price_kopecks'] * units
-        lines.append(f'{i}. {price_line(offer, item["quantity"])}')
-    lines.append(f'Итого: {money(total)}. Сумма по каталогу проверена. ' + queue('quote_multi'))
+        items.append({'id': offer['id'], 'sku': offer.get('sku') or '', 'name': offer['name'], 'price_kopecks': offer['price_kopecks'],
+                      'quantity': units, 'requested': item['quantity']})
+        lines.append(f'{i}. {price_line(offer, item["quantity"], units=units)}')
+    percent = 0
+    try:
+        percent = int(float(str(state.get('coupon_percent') or 0).replace(',', '.')))
+    except ValueError:
+        pass
+    percent = percent if 0 < percent <= 5 else 0
+    after = f', со скидкой по купону {percent}% — {money(discounted(total, percent))}' if percent else ''
+    # КП на несколько позиций — тот же путь, что и на одну: менеджер одобряет — клиент получает PDF
+    state['quote'] = {
+        'offer': {'id': items[0]['id'], 'sku': '', 'name': f'КП на {len(items)} поз.: ' + '; '.join(x['name'][:40] for x in items),
+                  'price_kopecks': total, 'source_date': source_date},
+        'items': items, 'quantity': 1, 'requested_users': sum(x['requested'] for x in items),
+        'customer': state['customer'], 'inn': state['inn'], 'kpp': state.get('kpp') or '',
+        'amount_kopecks': total, 'vat_kopecks': None, 'vat_status': 'НДС уточняется менеджером', 'payment_terms': 'Предоплата по оферте',
+        'source_date': source_date,
+    }
+    if percent:
+        state['quote'].update(discount_percent=percent, amount_after_discount_kopecks=discounted(total, percent))
+    state['awaiting_customer'] = False
+    lines.append(f'Итого: {money(total)}{after}. Сумма по каталогу проверена. ' + queue('quote_review'))
     state.pop('g_items', None)
     return '\n'.join(lines), []
 
