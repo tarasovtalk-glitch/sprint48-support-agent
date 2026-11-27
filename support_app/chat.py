@@ -84,7 +84,7 @@ def intent_cues(text: str) -> str:
 def tool_request(text: str, action: str | None, value: str, state: dict):
     """Return only scenario facts suitable for the model, never the customer's raw input."""
     query = normalize(text)
-    if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query):
+    if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query) and not state.get('smolensk_academic'):
         return ('Клиент уточняет условия для школы по ранее названной редакции. Подтверждённой цены для школы нет.',
                 ('contact_manager',))
     if state.get('flow') == 'needs':
@@ -421,6 +421,10 @@ def knowledge_hit(db, row, state, text, query, count, action, tool):
 
 def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', intent_hint='unknown', page_url='', tool=None):
     query = normalize(text)
+    if state.get('redcheck_follow_up') and re.match(r'^(?:нужн\w*\s+)?сетев\w*\s+на\s+\d+\s+ip\b', query):
+        text = 'RedCheck Professional ' + text
+        query = normalize(text)
+        state.pop('redcheck_follow_up', None)
     state['turn_no'] = state.get('turn_no', 0) + 1
     if text is not None and not text.strip() and not action:
         return 'Напишите, пожалуйста, ваш вопрос: какой продукт нужен или что подсказать по заказу?', []
@@ -445,6 +449,11 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
             return (f'Пересчитал: {product["name"]} — {chat_price(product["price_kopecks"])} × {state["quantity"]} = {chat_price(amount)}. '
                     + QUOTE_CUSTOMER_PROMPT), [('Подготовить КП', 'quote', '')]
     if state.get('flow') == 'smolensk' and EDUCATIONAL_PRICE.search(query):
+        offer = lookup(catalog, state['smolensk_academic']) if state.get('smolensk_academic') else None
+        if offer and offer['available'] and offer['price_kopecks']:
+            return (f'Для школы есть академическая позиция Astra Linux «Смоленск» для рабочей станции — '
+                    f'{chat_price(offer["price_kopecks"])} за лицензию. Карточка: {offer["url"]}. '
+                    'Право на академическую поставку и условия подтвердит менеджер.'), JOIN_MANAGER
         if tool == 'contact_manager':
             append_event(db, row['id'], 'model_tool_executed', tool)
         return 'Для школы цену нужно уточнить по условиям образовательной поставки. ' + enter_queue(db, row, state, 'price_confirmation'), []
@@ -472,6 +481,14 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
     if CRYPTO_NAME.search(query) and VIPNET_NAME.search(query):
         append_event(db, row['id'], 'product_comparison', 'cryptopro_vipnet')
         return CSP_COMPARISON, JOIN_MANAGER
+    if state.get('flow') == 'cryptopro' and re.search(r'обновлен\w*', query) and re.search(r'верси|платн', query):
+        return ('Оплата обновления зависит от версии и условий вашей лицензии. Стоимость перехода на названную версию '
+                'уточнит менеджер. У производителя есть отдельные лицензии на обновление: https://cryptopro.ru/faq/how-to-buy'), JOIN_MANAGER
+    if 'redcheck' in query and re.search(r'чем отлич|отличи|в чем разниц', query) and 'сетев' in query:
+        state['redcheck_follow_up'] = True
+        return ('Производитель указывает для RedCheck Professional лицензирование по числу IP-адресов (DNS-имён). '
+                'Отдельные условия позиции с пометкой «сетевая версия» в сравнении редакций не раскрыты, их подтвердит менеджер. '
+                'Условия производителя: https://www.redcheck.ru/licensing/'), JOIN_MANAGER
     if (state.get('inn_rejected') and state.get('inn_rejected_turn') != state['turn_no'] and INN_CONFIRM.search(query)
             and not INN_FORMAT.search(text)):
         # «Да, ИНН верный, формируйте» после вопроса о контрольной цифре — принимаем тот же ИНН, менеджер проверит
@@ -569,6 +586,18 @@ def run_turn(db, row, state, catalog: Path, *, text='', action=None, value='', i
         state['flow'] = 'smolensk'
         return '«Смоленск» нужен для рабочей станции или для сервера?', []
     if state.get('flow') == 'smolensk' and re.search(r'рабоч\w+|сервер', query):
+        if catalog.is_file() and re.search(r'рабоч\w*\s+станц', query) and 'бессроч' in query:
+            with closing(read_only(catalog)) as cat:
+                offer = cat.execute('''SELECT id, price_kopecks, url FROM products
+                    WHERE name LIKE 'ALSE%Смоленск%рабочей станции%' AND available=1 AND price_kopecks>0
+                      AND json_extract(parameters, '$.Срок действия')='бессрочная'
+                      AND json_extract(parameters, '$.Тип организации')='Академическая'
+                    ORDER BY price_kopecks, id LIMIT 1''').fetchone()
+            if offer:
+                state['smolensk_academic'] = offer['id']
+                return (f'В каталоге есть бессрочная академическая лицензия Astra Linux «Смоленск» для рабочей станции '
+                        f'от {chat_price(offer["price_kopecks"])} за лицензию. Карточка: {offer["url"]}. '
+                        'Вы закупаете для учебного заведения или коммерческой организации?'), JOIN_MANAGER
         return 'Точный артикул и цену для этой комплектации нужно сверить. ' + enter_queue(db, row, state, 'price_confirmation'), []
     if NEEDS_QUERY.search(query) and not state.get('g_family'):
         append_event(db, row['id'], 'requirements_understood', 'software_protection')

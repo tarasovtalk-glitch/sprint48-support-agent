@@ -78,6 +78,25 @@ def test_smolensk_asks_workstation_or_server(chat):
     assert 'рабочей станции или для сервера' in r['reply']
 
 
+def test_kaspersky_edition_follow_up_keeps_vendor(chat):
+    r = chat.say('Пришлите счёт на Касперского на 5 компьютеров на 1 и 2 года для сравнения')
+    assert 'редакцию Kaspersky' in r['reply'] and r['case']['state'] == 'open'
+    r = chat.say('Стандартный, новая лицензия')
+    assert 'Kaspersky' in r['reply'] and 'Radmin' not in r['reply']
+
+
+def test_cryptopro_upgrade_question_keeps_quote_open(chat):
+    chat.say('КриптоПро CSP 5.0 бессрочная на 10 рабочих мест')
+    r = chat.say('А на 6 версию потом обновление платное?')
+    assert 'обновления зависит' in r['reply'] and 'ИНН' not in r['reply']
+    assert chat.say(REQ)['case']['state'] == 'pending'
+
+
+def test_redcheck_network_license_question_with_masked_inn(chat):
+    r = chat.say('Чем отличается RedCheck Professional, сетевая версия, от обычной версии? ИНН [номер]')
+    assert 'лицензирование по числу IP' in r['reply'] and 'ИНН' not in r['reply']
+
+
 def test_explicit_operator_handoff(chat):
     chat.say('Позовите оператора')
     assert chat.state == 'pending'

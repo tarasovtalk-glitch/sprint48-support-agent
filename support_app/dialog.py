@@ -11,7 +11,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from .catalog import KASPERSKY_FAMILIES, discounted, normalize, read_only, tiered_annual_offer, view
+from .catalog import KASPERSKY_FAMILIES, discounted, kaspersky_tier, normalize, read_only, tiered_annual_offer, view
 
 # ── слова, которые не называют товар ──────────────────────────────────────────
 STOP = set('''
@@ -241,6 +241,8 @@ ACCESSORY = re.compile(r'техподдерж|техническ\w* поддер
 LICENSE_WORDS = re.compile(r'работ|подпис|укэп|эцп|самозанят|бессроч|лиценз|годов|год|компьютер|рабоч|мест|пользоват|сотрудник|устройств|счет|кп|стоимост|цен|ткп|базов|юр|физ')
 BRAND_DEFAULT = {'kaspersky': '413710', 'криптопро': '410137', 'криптоарм': '421003'}  # «касперский», «крипто про» без уточнений — основной продукт
 GENERIC = re.compile(r'standard|стандарт|business|бизнес|академ|образоват|server|сервер|lite|linux|corporate|professional|pro|enterprise|edition|license|home')
+EDITION_FOLLOWUP = re.compile(r'(?:standard|стандарт\w*|professional|профессиональн\w*|расширенн\w*|базов\w*)'
+                              r'(?:\W+(?:нов\w*\s+лицензи\w*|продлени\w*))?\W*')
 
 
 def _only_for(name: str, word: str) -> bool:
@@ -430,6 +432,11 @@ def per_unit(offer: dict) -> bool:
 def units_for(offer: dict, qty: int | None) -> int | None:
     if not qty:
         return 1
+    sku = (offer.get('sku') or '').upper()
+    family = next((prefix for prefix in KASPERSKY_FAMILIES if sku.startswith(prefix)), None)
+    if family:
+        tier = kaspersky_tier(qty)
+        return qty if tier and sku[len(family):].startswith(tier) else None
     lo, hi = offer.get('min_users'), offer.get('max_users')
     if hi and hi > 1:
         return 1 if (lo or 1) <= qty <= hi else None
@@ -769,6 +776,7 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
     t = normalize(text)
     if is_closing(text):
         return 'Спасибо за обращение! Если появятся вопросы, пишите сюда — отвечу.', []
+    provided_inn = re.search(r'\bинн\b[\s:=№]*\d', t)
     slots_from(text, state)
     tokens = words(text)
     if OFF_TOPIC.search(t):
@@ -794,7 +802,7 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
             current = _family(db, state['g_family'])
             if current:
                 return composition_reply(current, state.get('offer_id'), text), [('Позвать оператора', 'handoff', '')]
-        if state.get('g_items') and (re.search(r'\bинн\b', t) or state.get('awaiting_customer')):
+        if state.get('g_items') and (provided_inn or state.get('awaiting_customer')):
             return quote()   # общий путь КП: проверка «уже у менеджера», недостающие реквизиты, черновик
         several = None if state.get('g_family') or SKU.search(normalize(text)) else multi_item(db, state, text, queue)
         if several:
@@ -815,7 +823,7 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
             fresh = {w for w in tokens if not w.isdigit()} - prev
             if refined and r2 >= 0.5 and prev & set(hit2) and fresh & set(hit2):
                 family, hit = refined, hit2
-            elif ratio < 0.95 or prev & set(hit):
+            elif ratio < 0.95 or prev & set(hit) or EDITION_FOLLOWUP.fullmatch(t):
                 family = []
         brand_set = {out for _, outs in ALIASES for out in outs.split() if not GENERIC.fullmatch(out) and not out.isdigit()}
         branded = bool(set(hit) & brand_set) or 'pinned' in hit
@@ -852,6 +860,11 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
             state.pop('offer_id', None)
         elif state.get('g_family'):
             family = _family(db, state['g_family'])
+
+        if (named_new and not state.get('g_edition') and re.search(r'\b(?:kaspersky|касперск\w*)\b', t)
+                and state.get('quantity') and re.search(r'\b(?:компьютер|устройств|узл)', t)
+                and re.search(r'\b[1-3]\s+и\s+[1-3]\s+год', digits(t))):
+            return 'Для сравнения сроков уточните редакцию Kaspersky: стандартная или расширенная?', []
 
         special = state.get('flow') in ('cryptopro', 'mdaemon', 'needs', 'smolensk')
         if HANDOFF_ALWAYS.search(t) and not named_new:
@@ -894,8 +907,13 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
         title = family[0]['name'].split(',')[0] if family else 'Этот продукт'
         return (f'{title} есть в каталоге, но сейчас недоступен для заказа, поэтому цену не называю. '
                 + queue('price_confirmation') + ' Если подойдёт замена, напишите «аналог» — предложу из каталога.'), []
+    qty = state.get('quantity')
+    if qty and all((o.get('sku') or '').upper().startswith(KASPERSKY_FAMILIES) for o in available):
+        if not any(units_for(o, qty) is not None for o in available):
+            return (f'У предложений Kaspersky для этого продукта нет подтверждённой цены на {qty} устройств. '
+                    + queue('price_confirmation')), []
 
-    if re.search(r'\b(?:ооо|ао|пао|ип|гбу|мбу)\b|счет на|счёт на', t) and not re.search(r'\bинн\b', t):
+    if (re.match(r'^(?:ооо|ао|пао|ип|гбу|мбу)\b', t) or re.search(r'сч[её]т на', t)) and not provided_inn:
         offers = choose(family, state, text)
         if offers:
             state['offer_id'] = offers[0]['id']
@@ -903,7 +921,7 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
         return (f'Принял: {price_line(offers[0], state.get("quantity"))}. Для КП нужны ИНН и КПП организации (у ИП — только ИНН). Пришлёте?'
                 if offers else 'Для КП нужны название, ИНН и КПП организации. Пришлёте?'), []
     # реквизиты — сразу к КП
-    if re.search(r'\bинн\b', t):
+    if provided_inn:
         offers = choose(family, state, text)
         if len(offers) == 1 or (offers and state.get('offer_id') in {o['id'] for o in offers}):
             state['offer_id'] = state.get('offer_id') if state.get('offer_id') in {o['id'] for o in offers} else offers[0]['id']
@@ -943,7 +961,8 @@ def _catalog_turn(catalog: Path, state: dict, text: str, *, queue, quote):
     return '\n'.join(x for x in lines if x), [('Выбрать: ' + o['name'][:45], 'select_offer', o['id']) for o in shown]
 
 
-ITEM_SPLIT = re.compile(r'\s+(?:и|плюс|а\s+также|ещё|еще)\s+(?=(?:[1-9]\d{0,3})\s)|;|\n|\s\+\s(?=[1-9]\d{0,3}\s)')
+ITEM_SPLIT = re.compile(r'\s+(?:и|плюс|а\s+также|ещё|еще)\s+(?=[1-9]\d{0,3}\s+(?!год\b|год[а-я]+|лет\b|мес))'
+                        r'|;|\n|\s\+\s(?=[1-9]\d{0,3}\s)')
 
 
 COMMA_ITEM = re.compile(r',\s*')
