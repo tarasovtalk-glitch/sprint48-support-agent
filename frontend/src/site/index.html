@@ -4,43 +4,84 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Глазами клиента · SMF</title>
+  <title>Softline Store — витрина и чат с помощником</title>
   <link rel="icon" href="../favicon/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="../chat/chat.css">
   <style>
-    :root{color-scheme:light;--ink:#20283a;--navy:#20314f;--muted:#55627a;--line:#d7deea;--bg:#f1f4f9}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
-    .client-nav{background:var(--navy);color:#fff}
-    .client-nav div,main{max-width:960px;margin:auto;padding-inline:clamp(20px,5vw,56px)}
-    .client-nav div{min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .client-nav a{color:#fff;text-underline-offset:4px}
-    main{padding-block:clamp(42px,9vw,110px) 100px}
-    h1{max-width:700px;margin:0;font-size:clamp(38px,7vw,76px);line-height:1.02;letter-spacing:-.04em}
-    main>p{margin:18px 0 28px;max-width:500px;color:var(--muted);font-size:18px}
-    .client-topics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:34px 0 0;padding:0;list-style:none}
-    .client-topics button,.client-open{cursor:pointer;font:inherit}
-    .client-topics button{width:100%;height:100%;min-height:115px;padding:18px;text-align:left;background:white;color:var(--ink);border:1px solid var(--line);border-radius:10px}
-    .client-topics button:hover{border-color:var(--navy)}
-    .client-topics span{display:block;margin-top:5px;color:var(--muted);font-size:14px}
-    .client-open{border:0;border-radius:8px;background:var(--navy);color:white;padding:11px 18px;font-weight:600}
-    .client-open:hover{background:#31466f}
-    .client-open:focus-visible,.client-topics button:focus-visible{outline:2px solid var(--navy);outline-offset:3px}
-    .slc-feedback{display:none}
-    @media(max-width:640px){.client-topics{grid-template-columns:1fr}.client-topics button{min-height:0}}
+    :root { color-scheme: light; --ink: #1f2024; --accent: #a30839; --muted: #585d69; --line: #e1e3ea; --paper: #fff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f7fa; color: var(--ink); font: 16px/1.5 "SLChatInter", system-ui, sans-serif; }
+    .store-bar { border-bottom: 1px solid var(--line); background: var(--paper); }
+    .store-wrap { max-width: 1440px; margin: auto; padding-inline: clamp(16px, 4vw, 60px); }
+    .store-nav { min-height: 72px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; padding-block: 10px; }
+    .store-name { color: var(--accent); font-size: 22px; font-weight: 700; letter-spacing: -.03em; }
+    .store-nav nav { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 14px; }
+    .store-nav a, .product a { color: inherit; text-underline-offset: 4px; }
+    .store-nav a:hover, .product a:hover { color: var(--accent); }
+    .store-main { padding-block: clamp(32px, 5vw, 72px) 90px; }
+    .store-top { max-width: 630px; }
+    h1 { margin: 0; font-size: clamp(32px, 4vw, 54px); line-height: 1.08; letter-spacing: -.045em; }
+    .store-top p { margin: 14px 0 20px; color: var(--muted); }
+    .store-action { padding: 10px 14px; border: 1px solid transparent; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font: 600 14px/1.45 "SLChatInter", system-ui, sans-serif; }
+    .store-action:hover { background: #83072e; }
+    .store-main :focus-visible, .store-nav :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .catalog { margin-top: 40px; }
+    .catalog h2 { margin: 0 0 14px; font-size: 22px; letter-spacing: -.025em; }
+    .product-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .product { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+    .product small { color: var(--muted); font-size: 12px; }
+    .product h3 { margin: 4px 0 0; font-size: 17px; line-height: 1.3; }
+    .product p { margin: 8px 0 16px; color: var(--muted); font-size: 14px; }
+    .product .store-action { margin-top: auto; background: var(--paper); color: var(--accent); border-color: var(--line); }
+    .product .store-action:hover { border-color: var(--accent); background: #fff5f8; }
+    .slc-feedback { display: none; }
+    @media (min-width: 940px) {
+      body:has(#sl-chat.is-open) .store-main { padding-right: calc(404px + clamp(16px, 4vw, 60px)); }
+    }
+    @media (max-width: 600px) {
+      #sl-chat .slc-panel { right: 12px; bottom: 12px; width: min(380px, calc(100vw - 24px)); height: min(680px, calc(100dvh - 24px)); }
+    }
   </style>
 </head>
 <body>
-  <header class="client-nav"><div><strong>SMF · Демо магазина</strong><a href="../">Вернуться на стенд</a></div></header>
-  <main>
-    <h1>Каталог ПО<br>и поддержка</h1>
-    <p>Узнайте цену лицензии, запросите КП или задайте вопрос по заказу.</p>
-    <button type="button" class="client-open" data-open-chat>Написать в чат</button>
-    <ul class="client-topics" aria-label="Примеры обращений">
-      <li><button type="button" data-open-chat="Нужно КП на бессрочную лицензию КриптоПро для одного компьютера"><strong>Лицензии и КП</strong><span>Уточнить цену КриптоПро</span></button></li>
-      <li><button type="button" data-open-chat="Нужно защитить почту и файлы на 50 сотрудников"><strong>Подбор ПО</strong><span>Защитить почту и файлы</span></button></li>
-      <li><button type="button" data-open-chat="Где закрывающие документы?"><strong>Поддержка</strong><span>Найти закрывающие документы</span></button></li>
-    </ul>
+  <header class="store-bar">
+    <div class="store-wrap store-nav">
+      <strong class="store-name">Softline Store</strong>
+      <nav aria-label="Навигация витрины">
+        <a href="https://store.softline.ru/" target="_blank" rel="noopener noreferrer">Полный каталог Softline</a>
+        <a href="../">Вернуться на стенд</a>
+      </nav>
+    </div>
+  </header>
+  <main class="store-wrap store-main">
+    <div class="store-top">
+      <h1>Лицензии и программное обеспечение</h1>
+      <p>Витрина демостенда Softline Store. Помощник сверит цену по каталогу, подберёт лицензию и подготовит КП.</p>
+      <button type="button" class="store-action" data-open-chat>Написать помощнику</button>
+    </div>
+    <section class="catalog" aria-labelledby="catalog-heading">
+      <h2 id="catalog-heading">Из каталога</h2>
+      <ul class="product-list">
+        <li class="product">
+          <small>Электронная подпись</small>
+          <h3><a href="https://store.softline.ru/kripto-pro/-410137/" target="_blank" rel="noopener noreferrer">КриптоПро CSP 5.0</a></h3>
+          <p>Бессрочная лицензия на одно рабочее место</p>
+          <button type="button" class="store-action" data-open-chat="Сколько стоит бессрочная лицензия КриптоПро CSP 5.0 на одно рабочее место?" aria-label="Узнать цену КриптоПро CSP в чате">Узнать цену в чате</button>
+        </li>
+        <li class="product">
+          <small>Офисный пакет</small>
+          <h3><a href="https://store.softline.ru/microsoft/ep2-06605-473582/" target="_blank" rel="noopener noreferrer">Microsoft Office 2024</a></h3>
+          <p>Для дома и бизнеса, бессрочная лицензия на один ПК</p>
+          <button type="button" class="store-action" data-open-chat="Сколько стоит Microsoft Office 2024 для дома и бизнеса на один ПК?" aria-label="Узнать цену Microsoft Office в чате">Узнать цену в чате</button>
+        </li>
+        <li class="product">
+          <small>Операционная система</small>
+          <h3><a href="https://store.softline.ru/microsoft/fqc-10572-380385/" target="_blank" rel="noopener noreferrer">Windows 11 Pro</a></h3>
+          <p>Электронный ключ Microsoft, артикул FQC-10572</p>
+          <button type="button" class="store-action" data-open-chat="Сколько стоит Windows 11 Pro FQC-10572 на один компьютер?" aria-label="Узнать цену Windows 11 Pro в чате">Узнать цену в чате</button>
+        </li>
+      </ul>
+    </section>
   </main>
   <script src="../config.js"></script>
   <script src="../api.js"></script>
@@ -49,16 +90,18 @@
     const chat = document.querySelector('#sl-chat');
     const launcher = chat.querySelector('.slc-launcher');
     const input = chat.querySelector('input[aria-label="Сообщение"]');
+    function openStoreChat(prompt = '') {
+      if (!chat.classList.contains('is-open')) launcher.click();
+      if (prompt && !input.value.trim()) {
+        input.value = prompt;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.focus({ preventScroll: true });
+    }
     document.querySelectorAll('[data-open-chat]').forEach(button => {
-      button.addEventListener('click', () => {
-        if (!chat.classList.contains('is-open')) launcher.click();
-        if (button.dataset.openChat && !input.value.trim()) {
-          input.value = button.dataset.openChat;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        input.focus();
-      });
+      button.addEventListener('click', () => openStoreChat(button.dataset.openChat));
     });
+    if (window.matchMedia('(min-width: 940px)').matches) launcher.click();
   </script>
 </body>
 </html>
