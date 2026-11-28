@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<!-- Локальная копия главной store.softline.ru для демо хакатона «ИИкузница», снята 24.11.2026. Не публиковать. -->
+<!-- Локальная копия главной store.softline.ru для демо хакатона «ИИкузница», снята 24.11.2026. -->
 <html id="nojs" lang="ru" xml:lang="ru" xmlns:xlink="http://www.w3.org/1999/xlink"><head itemscope="" itemtype="https://schema.org/WPHeader"><meta content="noindex, nofollow" name="robots"/>
 <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
 <meta content="width=device-width, maximum-scale=1, user-scalable=no" name="viewport"/>
@@ -21,7 +21,9 @@
 <link href="styles/2020/css/store/tippy_light.css" media="all" rel="stylesheet" type="text/css"/>
 <link href="styles/2020/css/lib/photoswipe.css" media="all" rel="stylesheet" type="text/css"/>
 <title itemprop="headline">Интернет-магазин лицензионного программного обеспечения и электроники | Softline Store</title>
-<style>[data-copy-hidden]{display:none!important}</style><link href="../chat/chat.css" rel="stylesheet"/></head>
+<style>[data-copy-hidden]{display:none!important}</style><link href="../chat/chat.css" rel="stylesheet"/>
+<link href="demo-badge.css" rel="stylesheet"/>
+</head>
 <body>
 <div class="b-box b-box_content_svg-definitions" data-version="1794816382" id="svgDefinitions"><svg class="b-svg" height="0" width="0">
 <defs>
@@ -875,6 +877,9 @@
 <a class="b-store-header__nav-link b-store-header__nav-link_underline" href="/contacts/" rel="nofollow">
 				Контакты
 			</a>
+</li>
+<li class="b-store-header__nav-item">
+<button type="button" class="prototype-badge__menu" aria-controls="prototype-badge" aria-expanded="true">Скрыть бейджик демо</button>
 </li>
 </ul>
 </div>
@@ -10497,4 +10502,10 @@
 </div>
 </div> 
 </div>
+<div class="prototype-badge" id="prototype-badge">
+  <span>Демо-прототип конкурса «ИИкузница»</span>
+  <button type="button" class="prototype-badge__close" aria-label="Закрыть бейджик демо">×</button>
+</div>
+<button type="button" class="prototype-badge__launcher" aria-controls="prototype-badge" aria-expanded="true" aria-label="Скрыть бейджик демо">Метка</button>
+<script src="demo-badge.js"></script>
 <script src="../config.js"></script><script src="../api.js"></script><script src="../chat/chat.js"></script><script src="chat/site.js"></script></body></html>
